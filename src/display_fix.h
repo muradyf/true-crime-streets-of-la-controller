@@ -167,6 +167,21 @@ __declspec(naked) static void ApplyModeStub() {             // replaces call 0x6
     }
 }
 
+// Opening the Display screen (vtable 0x683218 slot 3, 0x56BEE0) never points the resolution/adapter/depth lists at
+// the current settings; only Cancel (0x571430 with 0, from 0x578C1B) does. The lists started on entry 0, so the screen
+// showed "640x480 Res" at any resolution. Run that refresh first; 0x56BEE0 then backs up the selections as before.
+static DWORD g_displayOpenOrig = 0;
+__declspec(naked) static void DisplayOpenHook() {           // thiscall(screen, arg), ret 4
+    __asm {
+        push ecx
+        push 0
+        mov eax, 0x571430                                   // thiscall(screen, 0): selections and list cursors
+        call eax
+        pop ecx
+        jmp dword ptr [g_displayOpenOrig]
+    }
+}
+
 // ---- MENU SIZE / HUD SIZE rows
 static const int kSizeSteps[] = { 50, 60, 70, 75, 80, 90, 100 };
 static DWORD g_displayItems[9][5];
@@ -255,7 +270,17 @@ static void DisplayFixInstall() {
         for (DWORD s : wSites) PatchDword(s, 0x6B16C8, (DWORD)&g_res[0].w);
         for (DWORD s : hSites) PatchDword(s, 0x6B16CC, (DWORD)&g_res[0].h);
         for (DWORD s : nSites) PatchDword(s, 0x6B16F0, (DWORD)&g_resCount);
-        PatchDword(0x571556, 0x000AC0D6, (DWORD)((BYTE*)&ApplyModeStub - (BYTE*)0x57155A));        Log("display resolution fix installed (modes 0x61D995, menu table, apply 0x571555); list: %s", g_resListText);
+        PatchDword(0x571556, 0x000AC0D6, (DWORD)((BYTE*)&ApplyModeStub - (BYTE*)0x57155A));
+        DWORD* openSlot = (DWORD*)(0x683218 + 3 * 4);
+        if (*openSlot == 0x56BEE0) {
+            DWORD old;
+            VirtualProtect(openSlot, 4, PAGE_READWRITE, &old);
+            g_displayOpenOrig = *openSlot;
+            *openSlot = (DWORD)&DisplayOpenHook;
+            VirtualProtect(openSlot, 4, old, &old);
+        }
+        Log("display resolution fix installed (modes 0x61D995, menu table, apply 0x571555, open %s); list: %s",
+            g_displayOpenOrig ? "0x683224" : "not hooked", g_resListText);
     }
 
     const DWORD* header = (const DWORD*)0x6AF67C;
