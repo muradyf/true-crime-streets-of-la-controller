@@ -191,16 +191,37 @@ static int g_restorePollFix = 1;
 static char g_restorePollIni[MAX_PATH] = "";
 static volatile LONG g_pollCalls = 0;
 static LARGE_INTEGER g_pollFreq = {}, g_pollLast = {}, g_pollWaitStart = {};
+static volatile LONG g_pollTotalCalls = 0;
+static LONGLONG g_pollTotalQpc = 0;                           // time spent inside the poll (game thread only)
 static void __cdecl RestorePoll() {
     InterlockedIncrement(&g_pollCalls);
-    if (!g_restorePollFix) { Sleep(5); return; }
+    InterlockedIncrement(&g_pollTotalCalls);
     LARGE_INTEGER now; QueryPerformanceCounter(&now);
     if (!g_pollFreq.QuadPart) QueryPerformanceFrequency(&g_pollFreq);
-    if ((now.QuadPart - g_pollLast.QuadPart) * 1000 > g_pollFreq.QuadPart * 20) g_pollWaitStart = now;   // a new wait
-    g_pollLast = now;
-    if ((now.QuadPart - g_pollWaitStart.QuadPart) * 1000 < g_pollFreq.QuadPart * 2) { if (!SwitchToThread()) YieldProcessor(); }
-    else Sleep(1);
+    if (!g_restorePollFix) Sleep(5);
+    else {
+        if ((now.QuadPart - g_pollLast.QuadPart) * 1000 > g_pollFreq.QuadPart * 20) g_pollWaitStart = now;   // a new wait
+        if ((now.QuadPart - g_pollWaitStart.QuadPart) * 1000 < g_pollFreq.QuadPart * 2) { if (!SwitchToThread()) YieldProcessor(); }
+        else Sleep(1);
+    }
     QueryPerformanceCounter(&g_pollLast);
+    g_pollTotalQpc += g_pollLast.QuadPart - now.QuadPart;
+}
+// Level loads use the same poll: report the polls and the time spent in them each time gameplay controls start
+// ([0x70CE48] from >= 2 to < 2), and re-read RestorePollFix once a second so a load can be A/B tested in one run.
+static ULONGLONG g_pollNextIni = 0;
+static int g_pollLastCtrl = -1;
+static void RestorePollUpdate() {
+    if (GetTickCount64() >= g_pollNextIni) {
+        g_pollNextIni = GetTickCount64() + 1000;
+        g_restorePollFix = (int)GetPrivateProfileIntA("Controller", "RestorePollFix", 1, g_dwmIniPath);
+    }
+    int ctrl = *(int*)0x70CE48;
+    if (g_pollLastCtrl >= 2 && ctrl < 2 && g_pollFreq.QuadPart)
+        Log("gameplay started: %ld polls since the last report, %.0f ms inside them (RestorePollFix=%d)",
+            (long)InterlockedExchange(&g_pollTotalCalls, 0), g_pollTotalQpc * 1000.0 / g_pollFreq.QuadPart, g_restorePollFix),
+        g_pollTotalQpc = 0;
+    g_pollLastCtrl = ctrl;
 }
 static void RestorePollInstall() {
     BYTE* p = (BYTE*)0x60E0CE;
