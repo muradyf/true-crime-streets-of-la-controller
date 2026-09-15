@@ -425,6 +425,10 @@ static void LoadConfig(HMODULE self) {
     g_uiFix = (int)GetPrivateProfileIntA("Controller", "UIScaleFix", 1, path);
     g_movieFix = (int)GetPrivateProfileIntA("Controller", "MovieAspectFix", 1, path);
     g_hudFix = (int)GetPrivateProfileIntA("Controller", "HUDScaleFix", 1, path);
+    g_menuScalePct = (int)GetPrivateProfileIntA("Controller", "MenuScale", 90, path);
+    g_hudScalePct = (int)GetPrivateProfileIntA("Controller", "HUDScale", 75, path);
+    if (g_menuScalePct < 10 || g_menuScalePct > 200) g_menuScalePct = 90;
+    if (g_hudScalePct < 10 || g_hudScalePct > 200) g_hudScalePct = 75;
     g_soundFix = (int)GetPrivateProfileIntA("Controller", "MenuSoundVolumeFix", 1, path);
     cfg.debugLog = get("DebugLog", cfg.debugLog);
     if (dot) { strcpy_s(dot, path + MAX_PATH - dot, ".log"); g_log = _fsopen(path, "w", _SH_DENYNO); }   // readable while the game runs

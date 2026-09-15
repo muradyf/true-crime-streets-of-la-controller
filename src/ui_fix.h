@@ -2,37 +2,44 @@
 //
 // 2D UI is authored in 640x480 pixels. The engine has UI scale factors [0x6AEA00]/[0x6AEA04] (set once to 1.0 by
 // SetUIScale 0x5515A0 from 0x4E7B19) and a safe rect [0x7280F0..FC] (SetSafeRect 0x551570, margins 32/24 or full).
-// Anchor helpers 0x4CB6D0 (X) / 0x4CB760 (Y): left/right/centre anchors add x*scale to the rect edge; unanchored X
-// adds x*scale to 0 (0x4CB74D: xor ecx,ecx). Screen size: W [0x6B9B98], H [0x6B9B9C].
+// Anchor helpers 0x4CB6D0 (X) / 0x4CB760 (Y): left/right/centre anchors add x*scale to the rect edge; unanchored X/Y
+// add x*scale to 0 (0x4CB74D / 0x4CB7DD: xor ecx,ecx). Screen size: W [0x6B9B98], H [0x6B9B9C].
 // Movies: 0x60E7B0 draws the Bink texture with 0x60A9F0(0,0,W,H,...) at 0x60E88B, i.e. stretched to the screen.
 //
-// Fix: scale = H/480; safe-rect margins scaled by the same factor (edge-anchored HUD stays at the real edges);
-// unanchored X offset by (W - H*4/3)/2 so full-layout screens are centred in a 4:3 area; movies drawn at 4:3 with
-// the screen cleared to black first.
+// Fix: menu scale = H/480 * MenuScale%; the 640x480 layout is centred (unanchored X/Y offsets), horizontal safe-rect
+// anchors stay at the real screen edges and vertical ones follow the centred 480-line box, margins scaled.
+// Movies drawn at 4:3 with the screen cleared to black first. The HUD has its own HUDScale% (hud_fix.h).
 #pragma once
 
 static int g_uiFix = 1, g_movieFix = 1;
+static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
 static int g_uiLastW = 0, g_uiLastH = 0;
-static int g_uiOffX = 0;
+static int g_uiOffX = 0, g_uiOffY = 0;
 static int g_rectMargins[4] = { 32, 24, 32, 24 };   // left, top, right, bottom as passed to SetSafeRect (last call)
 static bool g_rectKnown = false;
 
 static int  ScreenW() { return *(int*)0x6B9B98; }
 static int  ScreenH() { return *(int*)0x6B9B9C; }
-static float UiScale() { int h = ScreenH(); return h > 0 ? h / 480.0f : 1.0f; }
+static float FitScale(int pct) {
+    int h = ScreenH();
+    float s = h > 0 ? h / 480.0f * pct / 100.0f : 1.0f;
+    return s < 1.0f ? 1.0f : s;
+}
+static float UiScale() { return FitScale(g_menuScalePct); }
 
 static void ApplyUiScale() {
     float s = UiScale();
     *(float*)0x6AEA00 = s;
     *(float*)0x6AEA04 = s;
     int w = ScreenW(), h = ScreenH();
-    int off = (int)((w - h * 4.0f / 3.0f) / 2.0f);
-    g_uiOffX = off > 0 ? off : 0;
+    int offX = (int)((w - 640.0f * s) / 2.0f), offY = (int)((h - 480.0f * s) / 2.0f);
+    g_uiOffX = offX > 0 ? offX : 0;
+    g_uiOffY = offY > 0 ? offY : 0;
     if (g_rectKnown) {
         *(int*)0x7280F0 = (int)(g_rectMargins[0] * s);
-        *(int*)0x7280F8 = (int)(g_rectMargins[1] * s);
         *(int*)0x7280F4 = w - (int)(g_rectMargins[2] * s);
-        *(int*)0x7280FC = h - (int)(g_rectMargins[3] * s);
+        *(int*)0x7280F8 = g_uiOffY + (int)(g_rectMargins[1] * s);
+        *(int*)0x7280FC = h - g_uiOffY - (int)(g_rectMargins[3] * s);
     }
 }
 
@@ -53,13 +60,23 @@ static void UiFixUpdate() {                                 // called every inpu
     if (w != g_uiLastW || h != g_uiLastH) {
         g_uiLastW = w; g_uiLastH = h;
         ApplyUiScale();
-        Log("UI scale %.3f for %dx%d (4:3 offset %d)", UiScale(), w, h, g_uiOffX);
+        Log("UI scale %.3f (menus %d%%, HUD %d%% = %.3f) for %dx%d (layout offset %d,%d)",
+            UiScale(), g_menuScalePct, g_hudScalePct, FitScale(g_hudScalePct), w, h, g_uiOffX, g_uiOffY);
     }
 }
 
 __declspec(naked) static void UnanchoredXStub() {           // replaces 0x4CB74D: xor ecx,ecx; cvttss2si eax,xmm0; add eax,ecx; ret
     __asm {
         mov ecx, g_uiOffX
+        cvttss2si eax, xmm0
+        add eax, ecx
+        ret
+    }
+}
+
+__declspec(naked) static void UnanchoredYStub() {           // replaces 0x4CB7DD: same instructions for Y
+    __asm {
+        mov ecx, g_uiOffY
         cvttss2si eax, xmm0
         add eax, ecx
         ret
@@ -116,14 +133,15 @@ static void UiFixInstall() {
         const BYTE rectOrig[]  = { 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x4C, 0x24, 0x08 };
         const BYTE anchOrig[]  = { 0x33, 0xC9, 0xF3, 0x0F, 0x2C, 0xC0, 0x03, 0xC1, 0xC3 };
         if (memcmp((BYTE*)0x5515A0, scaleOrig, sizeof(scaleOrig)) || memcmp((BYTE*)0x551570, rectOrig, sizeof(rectOrig)) ||
-            memcmp((BYTE*)0x4CB74D, anchOrig, sizeof(anchOrig))) {
+            memcmp((BYTE*)0x4CB74D, anchOrig, sizeof(anchOrig)) || memcmp((BYTE*)0x4CB7DD, anchOrig, sizeof(anchOrig))) {
             Log("UI scale site bytes differ, UI fix not installed");
             g_uiFix = 0;
         } else {
             WriteJmp(0x5515A0, &SetUIScaleHook, 5);
             WriteJmp(0x551570, &SetSafeRectHook, 5);
             WriteJmp(0x4CB74D, &UnanchoredXStub, 9);
-            Log("UI scale fix installed (0x5515A0, 0x551570, 0x4CB74D)");
+            WriteJmp(0x4CB7DD, &UnanchoredYStub, 9);
+            Log("UI scale fix installed (0x5515A0, 0x551570, 0x4CB74D, 0x4CB7DD)");
         }
     }
     if (g_movieFix) {

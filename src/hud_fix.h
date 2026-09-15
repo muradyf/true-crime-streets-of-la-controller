@@ -19,7 +19,7 @@ static float g_hudScale = 1.0f;
 
 struct VirtualUiState {
     bool active = false;
-    int w = 0, h = 0, offX = 0;
+    int w = 0, h = 0, offX = 0, offY = 0;
     float scaleX = 1.0f, scaleY = 1.0f;
     int rect[4] = {};
 };
@@ -57,30 +57,45 @@ __declspec(naked) static void HudFlushStub() {              // replaces 0x609FD0
     }
 }
 
-static void BeginVirtualUi(VirtualUiState& st, const char* name) {
+// s = real pixels per virtual pixel. hudLayout: rebuild the safe rect and centring offsets from the game's own
+// margins in the virtual screen (HUD has its own size); otherwise divide the current menu layout by s so the pass
+// matches the surrounding menu exactly.
+static void BeginVirtualUi(VirtualUiState& st, const char* name, float s, bool hudLayout) {
     int w = ScreenW(), h = ScreenH();
-    if (!g_hudFix || g_inHud || h <= 480) return;          // nested passes keep the outer virtual space
-    float s = h / 480.0f;
+    if (!g_hudFix || g_inHud || s <= 1.0f) return;         // nested passes keep the outer virtual space
     st.active = true;
-    st.w = w; st.h = h; st.offX = g_uiOffX;
+    st.w = w; st.h = h; st.offX = g_uiOffX; st.offY = g_uiOffY;
     st.scaleX = *(float*)0x6AEA00; st.scaleY = *(float*)0x6AEA04;
     memcpy(st.rect, (void*)0x7280F0, sizeof(st.rect));
 
+    int vw = (int)(w / s + 0.5f), vh = (int)(h / s + 0.5f);
     *(float*)0x6AEA00 = 1.0f;
     *(float*)0x6AEA04 = 1.0f;
-    for (int i = 0; i < 4; ++i) *(int*)(0x7280F0 + i * 4) = (int)(st.rect[i] / s + 0.5f);
-    *(int*)0x6B9B98 = (int)(w / s + 0.5f);
-    *(int*)0x6B9B9C = 480;
-    g_uiOffX = (int)(st.offX / s + 0.5f);
+    *(int*)0x6B9B98 = vw;
+    *(int*)0x6B9B9C = vh;
+    if (hudLayout) {
+        int m[4] = { 32, 24, 32, 24 };
+        if (g_rectKnown) memcpy(m, g_rectMargins, sizeof(m));
+        *(int*)0x7280F0 = m[0];
+        *(int*)0x7280F4 = vw - m[2];
+        *(int*)0x7280F8 = m[1];
+        *(int*)0x7280FC = vh - m[3];
+        g_uiOffX = vw > 640 ? (vw - 640) / 2 : 0;
+        g_uiOffY = vh > 480 ? (vh - 480) / 2 : 0;
+    } else {
+        for (int i = 0; i < 4; ++i) *(int*)(0x7280F0 + i * 4) = (int)(st.rect[i] / s + 0.5f);
+        g_uiOffX = (int)(st.offX / s + 0.5f);
+        g_uiOffY = (int)(st.offY / s + 0.5f);
+    }
     g_hudScale = s;
     g_inHud = 1;
 
     static unsigned loggedMask = 0;
-    unsigned bit = name[0] == 'H' ? 1u : 2u;
+    unsigned bit = hudLayout ? 1u : 2u;
     if (!(loggedMask & bit)) {
         loggedMask |= bit;
-        Log("%s pass: virtual %dx480, safe rect %d,%d-%d,%d, scale %.3f", name,
-            *(int*)0x6B9B98, *(int*)0x7280F0, *(int*)0x7280F8, *(int*)0x7280F4, *(int*)0x7280FC, s);
+        Log("%s pass: virtual %dx%d, safe rect %d,%d-%d,%d, offset %d,%d, scale %.3f", name, vw, vh,
+            *(int*)0x7280F0, *(int*)0x7280F8, *(int*)0x7280F4, *(int*)0x7280FC, g_uiOffX, g_uiOffY, s);
     }
 }
 
@@ -93,12 +108,13 @@ static void EndVirtualUi(const VirtualUiState& st) {
     *(float*)0x6AEA00 = st.scaleX;
     *(float*)0x6AEA04 = st.scaleY;
     g_uiOffX = st.offX;
+    g_uiOffY = st.offY;
 }
 
 static void __cdecl HudRenderHook(void* self, int a, int b, int c, int d) {   // replaces cdecl thunk 0x4DD720
     auto render = (void(__fastcall*)(void*, void*, int, int, int, int))0x4DA780;   // thiscall, ret 0x10
     VirtualUiState st;
-    if (a == 4) BeginVirtualUi(st, "HUD");
+    if (a == 4) BeginVirtualUi(st, "HUD", FitScale(g_hudScalePct), true);
     render(self, nullptr, a, b, c, d);
     EndVirtualUi(st);
 }
@@ -106,7 +122,7 @@ static void __cdecl HudRenderHook(void* self, int a, int b, int c, int d) {   //
 static void __fastcall EpisodeScreenRenderHook(void* self, void*, void* batch) {  // vtable slot 0x68207C (thiscall, ret 4)
     auto render = (void(__fastcall*)(void*, void*, void*))0x568390;
     VirtualUiState st;
-    BeginVirtualUi(st, "episode map");
+    BeginVirtualUi(st, "episode map", UiScale(), false);
     render(self, nullptr, batch);
     EndVirtualUi(st);
 }

@@ -23,6 +23,7 @@ fully analog.
 | "save game" option in the pause menu | experimental |
 | Menus, HUD and text scaled for high resolutions; full-screen layouts centred in 4:3 | tested (2560×1600 menus) |
 | In-game HUD (portrait, street sign, radar, meters) and the episode-select map scaled with the screen height | tested (2560×1600) |
+| Separate menu and HUD size settings (`MenuScale`, `HUDScale`, percent of filling the screen height; defaults 90 / 75) | tested (2560×1600: 3.0× / 2.5×) |
 | Movies drawn at 4:3 with black bars instead of stretched | experimental |
 | First menu sound follows the SFX volume (it was hard-coded above maximum) | tested (memory read) |
 
