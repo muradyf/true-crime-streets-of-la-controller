@@ -14,11 +14,36 @@ static int g_deviceFix = 1;
 static int g_deviceRetries = 0;
 static DWORD g_deviceLastHr = 0;
 
+static bool GameWindowHasFocus() {
+    HWND fg = GetForegroundWindow();
+    DWORD pid = 0;
+    if (fg) GetWindowThreadProcessId(fg, &pid);
+    return fg && pid == GetCurrentProcessId() && !IsIconic(fg);
+}
+
+static void PumpDeviceWaitMessages() {
+    MSG m;
+    while (PeekMessageA(&m, nullptr, 0, 0, PM_REMOVE)) {
+        if (m.message == WM_QUIT) { Log("quit requested while the graphics device was lost"); ExitProcess((UINT)m.wParam); }
+        TranslateMessage(&m); DispatchMessageA(&m);
+    }
+}
+
+// Alt-tab / minimise makes CreateDevice return D3DERR_DEVICELOST (0x88760868) until the game window is active again,
+// so waiting is unbounded while the window is in the background; only failures while focused count toward giving up.
 static void __cdecl DeviceRetryPause() {
+    if (!GameWindowHasFocus()) {
+        Log("graphics device lost (hr 0x%08lX): waiting for the game window to be active again", g_deviceLastHr);
+        ULONGLONG start = GetTickCount64();
+        while (!GameWindowHasFocus()) { PumpDeviceWaitMessages(); Sleep(50); }
+        Log("game window active again after %llu ms, recreating the device", GetTickCount64() - start);
+        g_deviceRetries = 1;
+        Sleep(250);                        // let the window finish activating before CreateDevice
+        return;
+    }
     if (g_deviceRetries == 1 || g_deviceRetries % 20 == 0)
         Log("CreateDevice failed (hr 0x%08lX), retry %d", g_deviceLastHr, g_deviceRetries);
-    MSG m;
-    while (PeekMessageA(&m, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageA(&m); }
+    PumpDeviceWaitMessages();
     Sleep(100);
 }
 
@@ -62,8 +87,45 @@ __declspec(naked) static void AfterCreateDevice() {
     }
 }
 
+// 0x6125F0 (release-and-recreate: call 0x608D30 = CreateDevice path, then restore resources) is called from the main
+// loop (0x4E63D9), the resolution change (0x57155A) and WM_ACTIVATEAPP in the window procedure (0x6128C7).
+// The wait above pumps messages, so the window procedure can re-enter it while a re-creation is already running;
+// a nested call is skipped (the outer one creates the device and restores resources).
+static int g_inRecreate = 0, g_nestedRecreates = 0;
+static void __cdecl LogNestedRecreate() { Log("device re-creation requested while one is in progress: skipped (%d)", ++g_nestedRecreates); }
+
+__declspec(naked) static void RecreateGuard() {             // replaces call 0x608D30 at 0x6125F0
+    __asm {
+        cmp g_inRecreate, 0
+        jne nested
+        mov g_inRecreate, 1
+        mov eax, 0x608D30
+        call eax
+        mov g_inRecreate, 0
+        mov eax, 0x6125F5
+        jmp eax
+    nested:
+        pushad
+        call LogNestedRecreate
+        popad
+        ret
+    }
+}
+
 static void DeviceFixInstall() {
     if (!g_deviceFix) { Log("graphics device crash fix disabled in ini"); return; }
+    {
+        BYTE* g = (BYTE*)0x6125F0;
+        const BYTE callCreate[] = { 0xE8, 0x3B, 0x67, 0xFF, 0xFF };                // call 0x608D30
+        if (memcmp(g, callCreate, sizeof(callCreate)) == 0) {
+            DWORD o;
+            VirtualProtect(g, 5, PAGE_EXECUTE_READWRITE, &o);
+            g[0] = 0xE9;
+            *(int*)(g + 1) = (int)((BYTE*)&RecreateGuard - (g + 5));
+            VirtualProtect(g, 5, o, &o);
+            FlushInstructionCache(GetCurrentProcess(), g, 5);
+        } else Log("device re-create entry bytes differ, re-entry guard not installed");
+    }
     BYTE* site = (BYTE*)0x61DC2B;
     const BYTE expected[] = { 0x8B, 0x06, 0x8B, 0x10, 0x50, 0xFF, 0x52, 0x10 };   // mov eax,[esi]; mov edx,[eax]; push eax; call [edx+10]
     const BYTE entry[] = { 0xF6, 0x81, 0x64, 0x05, 0x00, 0x00, 0x10 };             // 0x61DBE2: test byte [ecx+0x564],10h
