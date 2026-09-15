@@ -1,13 +1,17 @@
-// Borderless fullscreen for resolutions other than the desktop's (BorderlessFullscreen=1, default).
+// Borderless fullscreen (BorderlessFullscreen=1, default).
 //
 // Exclusive fullscreen at a non-desktop mode renders black: the device comes back from CreateDevice already lost
 // (TestCooperativeLevel D3DERR_DEVICENOTRESET immediately after 0x61DC28, game in the foreground, no other topmost
 // windows; also with an X8R8G8B8 back buffer), and every Present fails with D3DERR_DEVICELOST. Re-creating the
-// device is lost again the same way. At the desktop resolution there is no mode switch and it works.
+// device is lost again the same way.
+// At the desktop resolution exclusive fullscreen works but is slow to come back from alt-tab: the game releases the
+// device on deactivate and re-creates it on activate, and the exclusive CreateDevice alone takes 3.2-4.9 s (2560x1600,
+// no refresh-rate change; measured with the device step log). A windowed device is created in ~100 ms and is not
+// released on alt-tab at all.
 //
-// So when the configured resolution differs from the desktop: run windowed (ForceWindowed patch, shot.h), make the
-// window a borderless popup covering the monitor, create the device with D3DSWAPEFFECT_COPY (required for a
-// destination rectangle), and Present the back buffer scaled into an aspect-correct rectangle with black bars.
+// So at every resolution: run windowed (ForceWindowed patch, shot.h), make the window a borderless popup covering the
+// monitor, create the device with D3DSWAPEFFECT_COPY (required for a destination rectangle), and Present the back
+// buffer scaled into an aspect-correct rectangle with black bars (1:1 at the desktop resolution).
 #pragma once
 
 static int g_borderless = 1;
@@ -36,10 +40,10 @@ static void BorderlessDecide() {
     } else {
         w = GetPrivateProfileIntA("Renderer", "ScreenWidth", g_deskW, gameIni); h = GetPrivateProfileIntA("Renderer", "ScreenHeight", g_deskH, gameIni);
     }
-    if (!g_borderless || (w == g_deskW && h == g_deskH)) return;
+    if (!g_borderless) return;
     g_borderlessActive = true;
     g_forceWindowed = 1;
-    Log("borderless fullscreen: %dx%d on a %dx%d desktop (exclusive fullscreen at a non-desktop mode loses the device)", w, h, g_deskW, g_deskH);
+    Log("borderless fullscreen: %dx%d on a %dx%d desktop", w, h, g_deskW, g_deskH);
 }
 
 static void ApplyBorderlessWindow(HWND h) {
@@ -75,16 +79,8 @@ static void __cdecl BorderlessAdjustPresentParams(DWORD renderer) {
     UINT* pp = (UINT*)(renderer + 0x528);
     if (pp[7] != 1) { Log("borderless: device requested fullscreen (windowed %u), not adjusting", pp[7]); return; }
     pp[5] = 3;   // D3DSWAPEFFECT_COPY
-    // aspect-correct destination rectangle for the back buffer on the desktop
-    double sx = (double)g_deskW / pp[0], sy = (double)g_deskH / pp[1];
-    double s = sx < sy ? sx : sy;
-    int w = (int)std::lround(pp[0] * s), hgt = (int)std::lround(pp[1] * s);
-    g_presentDst.left = (g_deskW - w) / 2; g_presentDst.top = (g_deskH - hgt) / 2;
-    g_presentDst.right = g_presentDst.left + w; g_presentDst.bottom = g_presentDst.top + hgt;
     HWND h = *(HWND*)0x75119C;
     if (h) ApplyBorderlessWindow(h);
-    Log("borderless: back buffer %ux%u presented at %ld,%ld-%ld,%ld (swap effect COPY)", pp[0], pp[1],
-        g_presentDst.left, g_presentDst.top, g_presentDst.right, g_presentDst.bottom);
 }
 
 __declspec(naked) static void BorderlessBeforeCreateStub() {   // replaces 0x61DBE2: test byte [ecx+564h],10h
@@ -105,6 +101,21 @@ static void BorderlessOnDeviceCreated() {                  // from DeviceRecover
     DWORD renderer = *(DWORD*)0x72C024;
     void* dev = renderer ? *(void**)(renderer + 0x560) : nullptr;
     if (!dev) return;
+    // Aspect-correct destination rectangle for the back buffer on the desktop. Computed after CreateDevice: before it
+    // (0x61DBE2) the parameters still hold the old window's client size (2538x1544 logged for a 2560x1600 device);
+    // the widescreen fix's hook at 0x61DC12 sets the final size.
+    UINT* pp = (UINT*)(renderer + 0x528);
+    if (pp[0] && pp[1]) {
+        double sx = (double)g_deskW / pp[0], sy = (double)g_deskH / pp[1];
+        double s = sx < sy ? sx : sy;
+        int w = (int)std::lround(pp[0] * s), hgt = (int)std::lround(pp[1] * s);
+        RECT r = { (g_deskW - w) / 2, (g_deskH - hgt) / 2, 0, 0 };
+        r.right = r.left + w; r.bottom = r.top + hgt;
+        if (memcmp(&r, &g_presentDst, sizeof(r))) {
+            g_presentDst = r;
+            Log("borderless: back buffer %ux%u presented at %ld,%ld-%ld,%ld (swap effect %u)", pp[0], pp[1], r.left, r.top, r.right, r.bottom, pp[5]);
+        }
+    }
     void** vt = *(void***)dev;
     if (vt == g_borderlessVtable) return;                  // vtable is shared by re-created devices
     DWORD old;
