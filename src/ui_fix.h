@@ -6,9 +6,11 @@
 // add x*scale to 0 (0x4CB74D / 0x4CB7DD: xor ecx,ecx). Screen size: W [0x6B9B98], H [0x6B9B9C].
 // Movies: 0x60E7B0 draws the Bink texture with 0x60A9F0(0,0,W,H,...) at 0x60E88B, i.e. stretched to the screen.
 //
-// Fix: menu scale = H/480 * MenuScale%; the 640x480 layout is centred (unanchored X/Y offsets), horizontal safe-rect
-// anchors stay at the real screen edges and vertical ones follow the centred 480-line box, margins scaled.
-// Movies drawn at 4:3 with the screen cleared to black first. The HUD has its own HUDScale% (hud_fix.h).
+// Fix: menu scale = H/480 * MenuScale%; the 640x480 layout is centred (unanchored X/Y offsets) and the safe-rect
+// anchors follow the centred 640x480 box with scaled margins, so left-, right- and unanchored items keep the 4:3
+// composition (right-aligned menu items used to hug the real screen edge while the logo sat in the box).
+// Movies and the loading screen (Title.xpr, same quad call) are drawn at 4:3 with the screen cleared to black first.
+// The HUD has its own HUDScale% and screen-edge layout (hud_fix.h).
 #pragma once
 
 static int g_uiFix = 1, g_movieFix = 1;
@@ -36,8 +38,8 @@ static void ApplyUiScale() {
     g_uiOffX = offX > 0 ? offX : 0;
     g_uiOffY = offY > 0 ? offY : 0;
     if (g_rectKnown) {
-        *(int*)0x7280F0 = (int)(g_rectMargins[0] * s);
-        *(int*)0x7280F4 = w - (int)(g_rectMargins[2] * s);
+        *(int*)0x7280F0 = g_uiOffX + (int)(g_rectMargins[0] * s);
+        *(int*)0x7280F4 = w - g_uiOffX - (int)(g_rectMargins[2] * s);
         *(int*)0x7280F8 = g_uiOffY + (int)(g_rectMargins[1] * s);
         *(int*)0x7280FC = h - g_uiOffY - (int)(g_rectMargins[3] * s);
     }
@@ -124,6 +126,36 @@ __declspec(naked) static void StreakYStub() {               // replaces 0x55B10D
     }
 }
 
+// Shell background (ShellBG.xpr, [0x728338]): the shell manager draws it with 0x4CB1A0(dst, src, 1.0) at 0x55DEBA and
+// 0x55DFAC, dst = {0, 0, W+1, H+1} (short x, y, w, h), i.e. stretched. The art is 4:3 and composed with the
+// 640x480 layout, so draw it in the centred 4:3 box and clear the side bars to black.
+static void __cdecl AdjustBackgroundRect(short* r) {
+    int x = r[0], y = r[1], w = r[2], h = r[3];
+    int target = (h * 4 + 1) / 3;
+    if (target >= w - 1) return;
+    int nx = x + (w - target) / 2;
+    r[0] = (short)nx;
+    r[2] = (short)target;
+    void* dev = *(void**)0x72C014;
+    if (dev) {
+        LONG bars[8] = { x, y, nx, y + h, nx + target, y, x + w, y + h };
+        void** vt = *(void***)dev;
+        ((HRESULT(__stdcall*)(void*, DWORD, void*, DWORD, DWORD, float, DWORD))vt[0x90 / 4])(dev, 2, bars, 1 /*TARGET*/, 0xFF000000, 1.0f, 0);
+    }
+}
+
+__declspec(naked) static void BackgroundRectStub() {        // replaces call 0x4CB1A0 (thiscall, dst*, src*, float)
+    __asm {
+        pushad
+        push dword ptr [esp + 0x24]                         // dst (after pushad 32 bytes + return address)
+        call AdjustBackgroundRect
+        add esp, 4
+        popad
+        mov eax, 0x4CB1A0
+        jmp eax
+    }
+}
+
 static bool PatchBytes(DWORD site, const BYTE* bytes, size_t len) {
     DWORD old;
     if (!VirtualProtect((LPVOID)site, len, PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -156,6 +188,21 @@ static void MenuArtFixInstall() {
         PatchBytes(0x55B119, scaleXDisp, 4);
         Log("streak line fix installed (0x55B0DD, 0x55B10D, 0x55B119)");
     }
+    int bgSites = 0;
+    for (DWORD site : { 0x55DEBAul, 0x55DFACul }) {
+        BYTE* p = (BYTE*)site;
+        if (p[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(p + 1)) != 0x4CB1A0) {
+            Log("shell background draw call at 0x%08lX differs, not patched", site);
+            continue;
+        }
+        DWORD old;
+        VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old);
+        *(int*)(p + 1) = (int)((BYTE*)&BackgroundRectStub - (p + 5));
+        VirtualProtect(p, 5, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), p, 5);
+        ++bgSites;
+    }
+    Log("shell background 4:3 fix installed (%d of 2 sites)", bgSites);
 }
 
 static void __cdecl AdjustMovieRect(float* a) {             // a = x0, y0, x1, y1
@@ -164,7 +211,7 @@ static void __cdecl AdjustMovieRect(float* a) {             // a = x0, y0, x1, y
     static float s_loggedW = 0, s_loggedH = 0;
     if (cfg.debugLog && (w != s_loggedW || h != s_loggedH)) {
         s_loggedW = w; s_loggedH = h;
-        Log("movie quad %.0f,%.0f-%.0f,%.0f -> x %.0f-%.0f", a[0], a[1], a[2], a[3],
+        Log("full-screen quad %.0f,%.0f-%.0f,%.0f -> x %.0f-%.0f", a[0], a[1], a[2], a[3],
             target < w - 1.0f ? a[0] + (w - target) / 2.0f : a[0], target < w - 1.0f ? a[0] + (w + target) / 2.0f : a[2]);
     }
     if (target >= w - 1.0f) return;
@@ -221,14 +268,23 @@ static void UiFixInstall() {
         }
     }
     if (g_movieFix) {
-        BYTE* p = (BYTE*)0x60E88B;
-        const BYTE callOrig[] = { 0xE8, 0x60, 0xC1, 0xFF, 0xFF };
-        if (memcmp(p, callOrig, sizeof(callOrig))) { Log("movie draw call bytes differ, movie fix not installed"); return; }
-        DWORD old;
-        VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old);
-        *(int*)(p + 1) = (int)((BYTE*)&MovieQuadStub - (p + 5));
-        VirtualProtect(p, 5, old, &old);
-        FlushInstructionCache(GetCurrentProcess(), p, 5);
-        Log("movie 4:3 fix installed (0x60E88B)");
+        // 0x60E88B: Bink movie frame. The others draw Title.xpr (loading screen after the intro movies / between
+        // levels) at 0,0,W,H: startup 0x4E7CBE and 0x4E7D43, loading state 0x610AC9 and 0x6113C5.
+        const DWORD sites[] = { 0x60E88B, 0x4E7CBE, 0x4E7D43, 0x610AC9, 0x6113C5 };
+        int installed = 0;
+        for (DWORD site : sites) {
+            BYTE* p = (BYTE*)site;
+            if (p[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(p + 1)) != 0x60A9F0) {
+                Log("full-screen quad call at 0x%08lX differs, not patched", site);
+                continue;
+            }
+            DWORD old;
+            VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old);
+            *(int*)(p + 1) = (int)((BYTE*)&MovieQuadStub - (p + 5));
+            VirtualProtect(p, 5, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), p, 5);
+            ++installed;
+        }
+        Log("movie / loading screen 4:3 fix installed (%d of 5 sites)", installed);
     }
 }
