@@ -378,6 +378,7 @@ static void __cdecl HookedInputUpdate() {
     ShotUpdate();
     RemapTitlesUpdate();
     D3DTraceUpdate();
+    DeviceFirstFrameCheck();
     MergePad();
 }
 

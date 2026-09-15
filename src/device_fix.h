@@ -117,37 +117,139 @@ __declspec(naked) static void AfterCreateDevice() {
 // a nested call is skipped (the outer one creates the device and restores resources).
 static int g_inRecreate = 0, g_nestedRecreates = 0;
 static void __cdecl LogNestedRecreate() { Log("device re-creation requested while one is in progress: skipped (%d)", ++g_nestedRecreates); }
-static void __cdecl LogRecreate(int after) {
-    Log("device re-create %s: device %p, loop state %d, window active %d", after ? "done" : "start",
-        *(void**)0x72C014, *(int*)0x6B99E0, (int)GameWindowHasFocus());
+static void __cdecl LogRecreate(int after, DWORD caller) {
+    Log("device re-create %s: device %p, loop state %d, window active %d, caller 0x%lX", after ? "done" : "start",
+        *(void**)0x72C014, *(int*)0x6B99E0, (int)GameWindowHasFocus(), caller);
 }
 
-__declspec(naked) static void RecreateGuard() {             // replaces call 0x608D30 at 0x6125F0
+// Timing of each step of the release (0x6125C0) and re-create (0x6125F0) paths, with the display mode after each step,
+// so a slow alt-tab can be attributed to CreateDevice / the display mode change or to the resource restore calls.
+static LARGE_INTEGER g_qpcFreq = {};
+static double g_stepBase = 0, g_stepLast = 0;
+static int g_firstFrameAfterRecreate = 0;
+static double QpcMs() {
+    if (!g_qpcFreq.QuadPart) QueryPerformanceFrequency(&g_qpcFreq);
+    LARGE_INTEGER t; QueryPerformanceCounter(&t);
+    return t.QuadPart * 1000.0 / g_qpcFreq.QuadPart;
+}
+static void __cdecl DeviceStep(int id) {
+    static const char* const names[] = {
+        /*0*/ "re-create start", "0x608D30 create + render states", "0x5EC120 restore", "0x60FEF0", "0x4E5740 restore",
+        /*5*/ "0x610070 restore", "0x60FF20", "", "", "",
+        /*10*/ "0x61DBC0 CreateDevice start", "0x61DBC0 CreateDevice done", "0x5ED5A0 start", "0x5ED5A0 done", "", "", "", "", "", "",
+        /*20*/ "release start", "release done" };
+    double now = QpcMs();
+    if (id == 0 || id == 20 || (id == 10 && !g_inRecreate)) g_stepBase = g_stepLast = now;
+    DEVMODEA dm = {}; dm.dmSize = sizeof(dm);
+    EnumDisplaySettingsA(nullptr, ENUM_CURRENT_SETTINGS, &dm);
+    char extra[160] = "";
+    if (id == 11) {
+        DWORD renderer = *(DWORD*)0x72C024;
+        UINT* pp = renderer ? (UINT*)(renderer + 0x528) : nullptr;
+        if (pp) sprintf_s(extra, " | pp %ux%u fmt %u windowed %u refresh %u interval 0x%X swap %u, hr 0x%08lX",
+            pp[0], pp[1], pp[2], pp[7], pp[11], pp[12], pp[5], g_deviceLastHr);
+    }
+    Log("device step %-32s +%6.0f ms (total %6.0f ms) display %lux%lu@%lu%s", names[id], now - g_stepLast, now - g_stepBase,
+        dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency, extra);
+    g_stepLast = now;
+    if (id == 6 || id == 1) g_firstFrameAfterRecreate = 1;
+}
+static void DeviceFirstFrameCheck() {                        // called from the per-frame input update
+    if (!g_firstFrameAfterRecreate || g_inRecreate) return;
+    g_firstFrameAfterRecreate = 0;
+    Log("device step first frame after re-create      total %6.0f ms", QpcMs() - g_stepBase);
+}
+
+#define DEVICE_STEP(n) __asm { pushad } __asm { pushfd } __asm { push n } __asm { call DeviceStep } __asm { add esp, 4 } __asm { popfd } __asm { popad }
+static DWORD fn_608D30 = 0x608D30, fn_5EC120 = 0x5EC120, fn_60FEF0 = 0x60FEF0, fn_4E5740 = 0x4E5740, fn_610070 = 0x610070,
+             fn_60FF20 = 0x60FF20, fn_61DBC0 = 0x61DBC0, fn_5ED5A0 = 0x5ED5A0, fn_6125C0 = 0x6125C0, g_ret5ED5A0 = 0;
+
+__declspec(naked) static void RecreateGuard() {             // replaces 0x6125F0 (same calls, with step timing)
     __asm {
         cmp g_inRecreate, 0
         jne nested
         mov g_inRecreate, 1
+    }
+    DEVICE_STEP(0)
+    __asm {
         pushad
+        push dword ptr [esp + 32]                // caller
         push 0
         call LogRecreate
-        add esp, 4
+        add esp, 8
         popad
-        mov eax, 0x608D30
-        call eax
+        call fn_608D30
+    }
+    DEVICE_STEP(1)
+    __asm {
+        mov eax, dword ptr ds:[0x72C014]
+        test eax, eax
+        jz done
+        mov ecx, 0x72C010
+        call fn_5EC120
+    }
+    DEVICE_STEP(2)
+    __asm { call fn_60FEF0 }
+    DEVICE_STEP(3)
+    __asm { call fn_4E5740 }
+    DEVICE_STEP(4)
+    __asm { call fn_610070 }
+    DEVICE_STEP(5)
+    __asm { call fn_60FF20 }
+    DEVICE_STEP(6)
+    __asm {
+    done:
         pushad
+        push 0
         push 1
         call LogRecreate
-        add esp, 4
+        add esp, 8
         popad
         mov g_inRecreate, 0
-        mov eax, 0x6125F5
-        jmp eax
+        ret
     nested:
         pushad
         call LogNestedRecreate
         popad
         ret
     }
+}
+
+__declspec(naked) static void TimedCreateDevice() {         // call 0x61DBC0 at 0x608D36
+    DEVICE_STEP(10)
+    __asm { call fn_61DBC0 }
+    DEVICE_STEP(11)
+    __asm { ret }
+}
+
+__declspec(naked) static void TimedRestore5ED5A0() {         // call 0x5ED5A0 (thiscall, ret 4) at 0x608DDE
+    DEVICE_STEP(12)
+    __asm {
+        pop g_ret5ED5A0                          // argument is now at [esp], as for a direct call
+        call fn_5ED5A0
+    }
+    DEVICE_STEP(13)
+    __asm {
+        push g_ret5ED5A0
+        ret
+    }
+}
+
+__declspec(naked) static void TimedRelease() {               // call 0x6125C0 at 0x61288D (WM_ACTIVATEAPP deactivate)
+    DEVICE_STEP(20)
+    __asm { call fn_6125C0 }
+    DEVICE_STEP(21)
+    __asm { ret }
+}
+
+static void RedirectCall(DWORD site, DWORD expectedTarget, void* fn, const char* what) {
+    BYTE* s = (BYTE*)site;
+    if (s[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(s + 1)) != expectedTarget) { Log("%s: call bytes differ, timing not installed", what); return; }
+    DWORD old;
+    VirtualProtect(s, 5, PAGE_EXECUTE_READWRITE, &old);
+    *(int*)(s + 1) = (int)((BYTE*)fn - (s + 5));
+    VirtualProtect(s, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), s, 5);
 }
 
 // Crash at TrueCrime.exe+0x14EFAD (also without mods) at resolutions other than the desktop's: 0x54E850 fills a
@@ -183,6 +285,9 @@ static void DeviceFixInstall() {
             VirtualProtect(g, 5, o, &o);
             FlushInstructionCache(GetCurrentProcess(), g, 5);
         } else Log("device re-create entry bytes differ, re-entry guard not installed");
+        RedirectCall(0x608D36, 0x61DBC0, &TimedCreateDevice, "CreateDevice timing (0x608D36)");
+        RedirectCall(0x608DDE, 0x5ED5A0, &TimedRestore5ED5A0, "restore timing (0x608DDE)");
+        RedirectCall(0x61288D, 0x6125C0, &TimedRelease, "release timing (0x61288D)");
     }
     BYTE* site = (BYTE*)0x61DC2B;
     const BYTE expected[] = { 0x8B, 0x06, 0x8B, 0x10, 0x50, 0xFF, 0x52, 0x10 };   // mov eax,[esi]; mov edx,[eax]; push eax; call [edx+10]
