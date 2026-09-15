@@ -83,6 +83,7 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "shot.h"
 #include "d3dtrace.h"
 #include "borderless.h"
+#include "controller_map.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -183,63 +184,18 @@ static void MergePad() {
     if (!p.start && g_prevStart && state != Menu) flags |= bit::FlagPause;   // game pauses on ESC release
     if (p.back || p.map) flags |= bit::FlagMap;
 
-    switch (state) {
-    case Menu:
+    if (state == Menu) {
         if (p.up) moveY = -127; if (p.down) moveY = 127; if (p.left) moveX = -127; if (p.right) moveX = 127;
         if (p.a) flags |= bit::FlagConfirm;
         if (p.b && !g_prevBack) flags |= bit::FlagBack;
-        break;
-    // Layout follows the original Xbox manual (A=Cross, B=Circle, X=Square, Y=Triangle, White=L1, Black=R1,
-    // LT=L2, RT=R2, left-thumbstick click=L3). Badge / warning shot / arrest+frisk are L3 combos in the manual.
-    case Ped: case Combat: case Gun:
-        if (p.l3) {                                                   // "left thumbstick button +" combos
-            if (p.x) bits |= bit::FlashBadge;                         // L3 + X
-            if (r2)  bits |= bit::WarningShot;                        // L3 + RT
-            if (p.b) bits |= bit::Arrest | bit::Frisk;                // L3 + B
-        } else {
-            if (p.x) bits |= bit::Punch;
-            if (p.b) bits |= bit::Grab;                               // grapple / throw / pick up / human shield
-            if (r2)  bits |= bit::Fire;                               // tap draws guns, hold = precision targeting
+    } else if (CtlModeForState(state) >= 0) {
+        bits = CtlBitsForPad(CtlModeForState(state), p, l2, r2);            // remappable layout (controller_map.h)
+        if (state == Driver) {
+            float throttle = cfg.triggersDrive ? p.r2 - p.l2 : -p.ry;   // Xbox: right thumbstick accelerate / brake
+            if (cfg.invertThrottle) throttle = -throttle;
+            camY = ToByteAxis(throttle);
+            camX = 0;
         }
-        if (p.a) bits |= (state == Gun ? bit::Cover : bit::Kick);     // shooting: hold A = take cover
-        if (p.y) bits |= bit::Jump;                                   // jump kick / roll / dive
-        if (p.l1 && state != Gun) bits |= bit::Block;                 // White (hold)
-        if (p.r1) bits |= bit::Reload;                                // Black
-        if (l2) bits |= bit::Commandeer;                              // LT: get in / commandeer
-        if (p.r3) bits |= bit::CenterCamera;                          // not in the manual; PC action
-        if (p.down) bits |= bit::NormalMode;
-        if (p.left) bits |= bit::FightMode; if (p.right) bits |= bit::GunMode;
-        break;
-    case Stealth:
-        if (p.a) bits |= bit::Cover;  if (p.y) bits |= bit::Jump;    // hold A cover, Y roll
-        // stun on Punch, deadly attack on Grab (TCPCUS.txt line 520; Xbox manual: X / B)
-        if (p.x) bits |= bit::Punch;  if (p.b) bits |= bit::Grab;
-        if (r2)  bits |= bit::Fire;   if (l2) bits |= bit::Commandeer;
-        if (p.down) bits |= bit::NormalMode; if (p.left) bits |= bit::FightMode; if (p.right) bits |= bit::GunMode;
-        break;
-    case Driver: {
-        float throttle = -p.ry;                       // Xbox: right thumbstick accelerate / brake
-        if (cfg.triggersDrive) {                      // optional alternative: R2/L2 analog, fire on R1, exit on L1
-            throttle = p.r2 - p.l2;
-            if (r2) bits |= bit::Accel;
-            if (l2) bits |= bit::Brake;
-            if (p.r1) bits |= bit::Fire;
-            if (p.l1) bits |= bit::Commandeer;
-        } else {
-            if (r2) bits |= bit::Fire;                // RT fire weapon
-            if (l2) bits |= bit::Commandeer;          // LT get in / out / commandeer
-        }
-        if (cfg.invertThrottle) throttle = -throttle;
-        camY = ToByteAxis(throttle);
-        camX = 0;
-        if (p.a) bits |= bit::Accel;      if (p.x) bits |= bit::Brake;
-        if (p.b) bits |= bit::Handbrake;  if (p.y) bits |= bit::RearView;
-        if (p.up) bits |= bit::Siren;     if (p.down) bits |= bit::Horn;
-        if (p.left || p.right) bits |= bit::CarCamera;   // tap D-pad: change view
-        if (p.r3) bits |= bit::SkipTrack;                // not in the manual; PC action
-        break;
-    }
-    default: break;
     }
 
     // Precision targeting: the manual moves the reticule with the LEFT analog stick. The game reads these axes as
@@ -341,6 +297,7 @@ static const char* __cdecl PromptName(int dik, int actionIndex) {
     return ((const char* (__cdecl*)(int))0x61E5C0)(dik);
 }
 
+
 static bool PatchCall(DWORD site, BYTE* expectedTarget4, void* newTarget, const char* what) {
     BYTE* p = (BYTE*)site;
     if (p[0] != 0xE8 || memcmp(p + 1, expectedTarget4, 4) != 0) { Log("%s: call site bytes differ, not patching", what); return false; }
@@ -426,6 +383,7 @@ static void LoadConfig(HMODULE self) {
     cfg.aimSpeed = get("AimSpeed", cfg.aimSpeed);
     cfg.buttonPrompts = get("ButtonPrompts", cfg.buttonPrompts);
     ExtrasLoadConfig(path);
+    CtlLoadMap(path);
     g_deviceFix = (int)GetPrivateProfileIntA("Controller", "GraphicsCrashFix", 1, path);
     g_pauseSave = (int)GetPrivateProfileIntA("Controller", "PauseMenuSave", 1, path);
     g_uiFix = (int)GetPrivateProfileIntA("Controller", "UIScaleFix", 1, path);
