@@ -78,6 +78,7 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "device_fix.h"
 #include "pause_save.h"
 #include "ui_fix.h"
+#include "hud_fix.h"
 #include "sound_fix.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
@@ -423,6 +424,7 @@ static void LoadConfig(HMODULE self) {
     g_pauseSave = (int)GetPrivateProfileIntA("Controller", "PauseMenuSave", 1, path);
     g_uiFix = (int)GetPrivateProfileIntA("Controller", "UIScaleFix", 1, path);
     g_movieFix = (int)GetPrivateProfileIntA("Controller", "MovieAspectFix", 1, path);
+    g_hudFix = (int)GetPrivateProfileIntA("Controller", "HUDScaleFix", 1, path);
     g_soundFix = (int)GetPrivateProfileIntA("Controller", "MenuSoundVolumeFix", 1, path);
     cfg.debugLog = get("DebugLog", cfg.debugLog);
     if (dot) { strcpy_s(dot, path + MAX_PATH - dot, ".log"); g_log = _fsopen(path, "w", _SH_DENYNO); }   // readable while the game runs
@@ -444,6 +446,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID) {
         DeviceFixInstall();
         PauseSaveInstall();
         UiFixInstall();
+        HudFixInstall();
         SoundFixInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         ExtrasShutdown();
