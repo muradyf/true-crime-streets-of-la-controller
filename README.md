@@ -21,6 +21,9 @@ fully analog.
 | Lightbar colour and R2 resistance when a weapon is out | experimental |
 | Fix for the crash when the game re-creates its graphics device (e.g. after a mission) | experimental |
 | "save game" option in the pause menu | experimental |
+| Menus, HUD and text scaled for high resolutions; full-screen layouts centred in 4:3 | tested (2560×1600 menus) |
+| Movies drawn at 4:3 with black bars instead of stretched | experimental |
+| First menu sound follows the SFX volume (it was hard-coded above maximum) | tested (memory read) |
 
 ## Requirements
 
@@ -110,6 +113,10 @@ controller and input values to `scripts\TrueCrimeDualSense.log` when reporting a
 | `0x5FE480` | Vibration output, an empty `ret 8` on PC; called by the vibration manager (`0x551350`). |
 | `0x61DBC0` / `0x61DC2B` | Direct3D 8 device create/reset; dereferenced the device without checking `CreateDevice`. Patched to check and retry (keeps the Widescreen Fix hook at `0x61DC12`). |
 | `0x6AF6F0` | Pause-menu item table; a fifth item opens the manual save screen (screen 3). |
+| `0x5515A0` / `0x551570` | UI scale (`0x6AEA00/04`, set once to 1.0) and safe rect (`0x7280F0..FC`). Hooked: scale = height / 480, safe-rect margins scaled to match. |
+| `0x4CB74D` | Unanchored UI X (`xor ecx,ecx`); offset by `(width − height·4/3) / 2` so full-layout screens are centred. |
+| `0x60E88B` | Bink movie quad drawn at `0,0,W,H`; narrowed to 4:3 after clearing the screen to black. |
+| `0x4E71E8` | Sound init sets the menu category (`0x20`) to 0.65 before the ini volumes are applied; the SFX slider maps 0–10 to 0–0.585. The volumes are now applied right after it. |
 
 DualSense report formats follow the Linux `hid-playstation` driver (Bluetooth output reports need a CRC32 with seed
 `0xA2`, and Windows requires writes padded to the device's largest output report).

@@ -77,6 +77,8 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "extras.h"
 #include "device_fix.h"
 #include "pause_save.h"
+#include "ui_fix.h"
+#include "sound_fix.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -383,6 +385,7 @@ __declspec(naked) static void CallOriginalUpdate() {
 
 static void __cdecl HookedInputUpdate() {
     CallOriginalUpdate();
+    UiFixUpdate();
     MergePad();
 }
 
@@ -418,6 +421,9 @@ static void LoadConfig(HMODULE self) {
     ExtrasLoadConfig(path);
     g_deviceFix = (int)GetPrivateProfileIntA("Controller", "GraphicsCrashFix", 1, path);
     g_pauseSave = (int)GetPrivateProfileIntA("Controller", "PauseMenuSave", 1, path);
+    g_uiFix = (int)GetPrivateProfileIntA("Controller", "UIScaleFix", 1, path);
+    g_movieFix = (int)GetPrivateProfileIntA("Controller", "MovieAspectFix", 1, path);
+    g_soundFix = (int)GetPrivateProfileIntA("Controller", "MenuSoundVolumeFix", 1, path);
     cfg.debugLog = get("DebugLog", cfg.debugLog);
     if (dot) { strcpy_s(dot, path + MAX_PATH - dot, ".log"); g_log = _fsopen(path, "w", _SH_DENYNO); }   // readable while the game runs
 }
@@ -437,6 +443,8 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID) {
         if (xcfg.rumble) ExtrasInstallHooks();
         DeviceFixInstall();
         PauseSaveInstall();
+        UiFixInstall();
+        SoundFixInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         ExtrasShutdown();
     }
