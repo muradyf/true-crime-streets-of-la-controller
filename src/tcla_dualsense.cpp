@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cmath>
+#include <intrin.h>
 #include "dualsense_hid.h"
 
 namespace addr {
@@ -406,6 +407,7 @@ static void LoadConfig(HMODULE self) {
     char path[MAX_PATH]; GetModuleFileNameA(self, path, MAX_PATH);
     char* dot = strrchr(path, '.'); if (dot) strcpy_s(dot, path + MAX_PATH - dot, ".ini");
     ShotInit(path);
+    strcpy_s(g_dwmIniPath, path);
     strcpy_s(g_fakePadPath, path); { char* d2 = strrchr(g_fakePadPath, '.'); if (d2) strcpy_s(d2, g_fakePadPath + MAX_PATH - d2, ".pad"); }
     auto get = [&](const char* k, int def) { return (int)GetPrivateProfileIntA("Controller", k, def, path); };
     cfg.stickDeadzone = get("StickDeadzone", cfg.stickDeadzone);

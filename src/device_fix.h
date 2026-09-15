@@ -132,7 +132,58 @@ static double QpcMs() {
     LARGE_INTEGER t; QueryPerformanceCounter(&t);
     return t.QuadPart * 1000.0 / g_qpcFreq.QuadPart;
 }
+// Exclusive fullscreen CreateDevice (and re-create after alt-tab) spends 3 s in Windows' d3d8.dll: when DWM composition
+// is on, it resets the named event DWM_DX_FULLSCREEN_TRANSITION_EVENT (opened at d3d8+0x242F4), starts the fullscreen
+// transition, then waits WaitForSingleObject(event, 3000) (d3d8+0x25802). Stack samples put 95% of CreateDevice there.
+// The d3d8 import of WaitForSingleObject is wrapped; only that call site (return address after the pattern) is
+// affected. Measured on Windows 11 26100 (Intel Iris Xe display, 2560x1600@240): the event is never signaled, the
+// wait always times out at 3000 ms, so every exclusive CreateDevice costs 3 s (5 s at startup). The wait itself is
+// still needed for part of that time: with 0 ms, DXGI screen captures after startup and after alt-tab were black
+// (5 of 5); with 250, 500, 1000 or 2000 ms they showed the menu (4 of 4), like Windows' 3000 ms. Default 500 ms:
+// alt-tab back 4.5 s -> ~1.7-2 s to the first frame. FullscreenTransitionWait (ms, read on every call; 3000 =
+// Windows' behaviour) caps the wait; the result and duration are logged.
+static char g_dwmIniPath[MAX_PATH] = "";
+static DWORD (WINAPI* g_origD3d8Wait)(HANDLE, DWORD) = nullptr;
+static DWORD g_d3d8WaitReturn = 0;
+static bool g_d3d8WaitTried = false;
+static DWORD WINAPI D3d8TransitionWait(HANDLE h, DWORD ms) {
+    if (ms != 3000 || (DWORD)_ReturnAddress() != g_d3d8WaitReturn) return g_origD3d8Wait(h, ms);
+    int cap = (int)GetPrivateProfileIntA("Controller", "FullscreenTransitionWait", 500, g_dwmIniPath);
+    if (cap < 0 || cap > 3000) cap = 3000;
+    LARGE_INTEGER f, a, b; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&a);
+    DWORD r = g_origD3d8Wait(h, (DWORD)cap);
+    QueryPerformanceCounter(&b);
+    Log("d3d8 DWM fullscreen transition wait: %s after %.0f ms (limit %d ms)",
+        r == WAIT_OBJECT_0 ? "signaled" : r == WAIT_TIMEOUT ? "timed out" : "failed", (b.QuadPart - a.QuadPart) * 1000.0 / f.QuadPart, cap);
+    return r;
+}
+static void D3d8TransitionWaitInstall() {
+    if (g_d3d8WaitTried) return;
+    g_d3d8WaitTried = true;
+    HMODULE m = GetModuleHandleA("d3d8.dll");
+    if (!m) { Log("d3d8 transition wait: d3d8.dll not loaded"); return; }
+    BYTE* base = (BYTE*)m;
+    DWORD size = ((IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew))->OptionalHeader.SizeOfImage;
+    const BYTE pat[] = { 0x68, 0xB8, 0x0B, 0x00, 0x00, 0xFF, 0xB3, 0xAC, 0x01, 0x00, 0x00, 0xFF, 0x15 };   // push 3000; push [ebx+1ACh]; call [imp]
+    for (DWORD i = 0x1000; i + sizeof(pat) + 4 < size; ++i) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if ((i & 0xFFF) == 0 && (!VirtualQuery(base + i, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))) { i += 0xFFF; continue; }
+        if (memcmp(base + i, pat, sizeof(pat))) continue;
+        void** slot = *(void***)(base + i + sizeof(pat));
+        g_d3d8WaitReturn = (DWORD)(base + i + sizeof(pat) + 4);
+        DWORD old;
+        if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old)) return;
+        g_origD3d8Wait = (DWORD(WINAPI*)(HANDLE, DWORD))*slot;
+        *slot = (void*)&D3d8TransitionWait;
+        VirtualProtect(slot, sizeof(void*), old, &old);
+        Log("d3d8 transition wait hook installed (d3d8+0x%lX)", i);
+        return;
+    }
+    Log("d3d8 transition wait pattern not found, hook not installed");
+}
+
 static void __cdecl DeviceStep(int id) {
+    if (id == 10) D3d8TransitionWaitInstall();
     static const char* const names[] = {
         /*0*/ "re-create start", "0x608D30 create + render states", "0x5EC120 restore", "0x60FEF0", "0x4E5740 restore",
         /*5*/ "0x610070 restore", "0x60FF20", "", "", "",
