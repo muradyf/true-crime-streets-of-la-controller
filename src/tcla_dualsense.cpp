@@ -406,6 +406,7 @@ static void LoadConfig(HMODULE self) {
     g_forceWindowed = (int)GetPrivateProfileIntA("Controller", "ForceWindowed", 0, path);
     g_soundTrace = (int)GetPrivateProfileIntA("Controller", "SoundTrace", 0, path);
     g_d3dTrace = (int)GetPrivateProfileIntA("Controller", "D3DTrace", 0, path);
+    g_shaderTrace = (int)GetPrivateProfileIntA("Controller", "ShaderTrace", 0, path);
     g_logCreateState = g_d3dTrace;
     g_deviceProfile = (int)GetPrivateProfileIntA("Controller", "DeviceProfile", 0, path);
     g_borderless = (int)GetPrivateProfileIntA("Controller", "BorderlessFullscreen", 1, path);
@@ -437,6 +438,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         RemapScreenInstall();
         SoundFixInstall();
         DisplayFixInstall();
+        ShaderTraceInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);
         ExtrasShutdown();

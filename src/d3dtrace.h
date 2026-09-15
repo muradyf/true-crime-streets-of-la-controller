@@ -10,7 +10,7 @@ static void** g_d3dTraceVtable = nullptr;
 struct D3DCounter { int calls = 0, fails = 0; HRESULT lastFail = 0; };
 static D3DCounter g_cPresent, g_cBegin, g_cEnd, g_cClear, g_cDraw, g_cDrawIdx, g_cDrawUP, g_cDrawIdxUP, g_cViewport, g_cRT;
 static struct { DWORD x, y, w, h; float minz, maxz; } g_lastViewport;
-static void* g_origD3D[80];
+static void* g_origD3D[96];     // needs room for CreatePixelShader (87)
 static ULONGLONG g_nextD3DReport = 0;
 
 static inline HRESULT Count(D3DCounter& c, HRESULT hr) { ++c.calls; if (FAILED(hr)) { ++c.fails; c.lastFail = hr; } return hr; }
@@ -37,6 +37,81 @@ static HRESULT __stdcall HkDrawUP(void* d, DWORD t, UINT pc, void* data, UINT st
 }
 static HRESULT __stdcall HkDrawIdxUP(void* d, DWORD t, UINT mi, UINT nv, UINT pc, void* idx, DWORD fmt, void* data, UINT stride) {
     return Count(g_cDrawIdxUP, ((HRESULT(__stdcall*)(void*, DWORD, UINT, UINT, UINT, void*, DWORD, void*, UINT))g_origD3D[73])(d, t, mi, nv, pc, idx, fmt, data, stride));
+}
+
+// ShaderTrace=1 (debug): the game creates its vertex/pixel shaders once at start (0x5EC9E0 / 0x5ECAE0 call
+// CreateVertexShader / CreatePixelShader, vtable 75 / 87) and does not check the result, so a driver or wrapper that
+// rejects one leaves handle 0 and the geometry draws with the fixed-function pipeline (white/untextured).
+static int g_shaderTrace = 0;
+static int g_shaderSeq = 0;
+
+static HRESULT __stdcall HkCreateVS(void* d, const DWORD* decl, const DWORD* fn, DWORD* handle, DWORD usage) {
+    HRESULT hr = ((HRESULT(__stdcall*)(void*, const DWORD*, const DWORD*, DWORD*, DWORD))g_origD3D[75])(d, decl, fn, handle, usage);
+    int i = ++g_shaderSeq;
+    if (FAILED(hr) || !handle || !*handle)
+        Log("shader trace: vertex shader #%d FAILED hr 0x%08lX handle %lu (version 0x%08lX)", i, hr,
+            handle ? *handle : 0, fn ? fn[0] : 0);
+    else if (g_shaderTrace > 1)
+        Log("shader trace: vertex shader #%d ok handle %lu (version 0x%08lX)", i, *handle, fn ? fn[0] : 0);
+    return hr;
+}
+
+static HRESULT __stdcall HkCreatePS(void* d, const DWORD* fn, DWORD* handle) {
+    HRESULT hr = ((HRESULT(__stdcall*)(void*, const DWORD*, DWORD*))g_origD3D[87])(d, fn, handle);
+    int i = ++g_shaderSeq;
+    if (FAILED(hr) || !handle || !*handle)
+        Log("shader trace: pixel shader #%d FAILED hr 0x%08lX handle %lu (version 0x%08lX)", i, hr,
+            handle ? *handle : 0, fn ? fn[0] : 0);
+    else if (g_shaderTrace > 1)
+        Log("shader trace: pixel shader #%d ok handle %lu (version 0x%08lX)", i, *handle, fn ? fn[0] : 0);
+    return hr;
+}
+
+// The names come from the game's own loaders: 0x5EC9E0(path, decl) creates a vertex shader, 0x5ECAE0(path) a pixel
+// shader, both returning 0 on failure. Logging the path here and the result in the vtable hooks above pairs them up.
+static void __cdecl LogShaderLoad(const char* path) {
+    if (path) Log("shader trace: loading %s", path);
+}
+
+__declspec(naked) static void ShaderLoadVSStub() {          // entry of 0x5EC9E0: sub esp,8 ; mov al,[ecx+18h]
+    __asm {
+        pushad
+        push dword ptr [esp + 0x24]                         // path (pushad 32 + return address)
+        call LogShaderLoad
+        add esp, 4
+        popad
+        sub esp, 8
+        mov al, byte ptr [ecx + 0x18]
+        push 0x5EC9E6
+        ret
+    }
+}
+
+__declspec(naked) static void ShaderLoadPSStub() {          // entry of 0x5ECAE0: sub esp,8 ; mov eax,[esp+0Ch]
+    __asm {
+        pushad
+        push dword ptr [esp + 0x24]
+        call LogShaderLoad
+        add esp, 4
+        popad
+        sub esp, 8
+        mov eax, dword ptr [esp + 0x0C]
+        push 0x5ECAE7
+        ret
+    }
+}
+
+static void ShaderTraceInstall() {
+    if (!g_shaderTrace) return;
+    const BYTE vsOrig[] = { 0x83, 0xEC, 0x08, 0x8A, 0x41, 0x18 };
+    const BYTE psOrig[] = { 0x83, 0xEC, 0x08, 0x8B, 0x44, 0x24, 0x0C };
+    if (memcmp((BYTE*)0x5EC9E0, vsOrig, sizeof(vsOrig)) || memcmp((BYTE*)0x5ECAE0, psOrig, sizeof(psOrig))) {
+        Log("shader loader bytes differ, shader trace names not installed");
+        return;
+    }
+    WriteJmp(0x5EC9E0, &ShaderLoadVSStub, sizeof(vsOrig));
+    WriteJmp(0x5ECAE0, &ShaderLoadPSStub, sizeof(psOrig));
+    Log("shader trace installed (0x5EC9E0, 0x5ECAE0)");
 }
 
 static void D3DTraceHookSlot(void** vt, int i, void* fn) {
@@ -79,7 +154,22 @@ static LRESULT CALLBACK TraceWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return CallWindowProcA(g_origGameWndProc, h, m, w, l);
 }
 
+static void** g_shaderTraceVtable = nullptr;
+
+static void ShaderTraceUpdate() {                           // hook the create calls as soon as a device exists
+    if (!g_shaderTrace) return;
+    void* dev = *(void**)0x72C014;
+    if (!dev) return;
+    void** vt = *(void***)dev;
+    if (vt == g_shaderTraceVtable) return;
+    g_shaderTraceVtable = vt;
+    D3DTraceHookSlot(vt, 75, &HkCreateVS);
+    D3DTraceHookSlot(vt, 87, &HkCreatePS);
+    Log("shader trace: create hooks installed (vtable %p)", (void*)vt);
+}
+
 static void D3DTraceUpdate() {
+    ShaderTraceUpdate();
     if (!g_d3dTrace) return;
     void* dev = *(void**)0x72C014;
     if (!dev) return;
