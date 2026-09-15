@@ -80,6 +80,7 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "ui_fix.h"
 #include "hud_fix.h"
 #include "sound_fix.h"
+#include "shot.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -387,6 +388,7 @@ __declspec(naked) static void CallOriginalUpdate() {
 static void __cdecl HookedInputUpdate() {
     CallOriginalUpdate();
     UiFixUpdate();
+    ShotUpdate();
     MergePad();
 }
 
@@ -410,6 +412,7 @@ static bool InstallHook() {
 static void LoadConfig(HMODULE self) {
     char path[MAX_PATH]; GetModuleFileNameA(self, path, MAX_PATH);
     char* dot = strrchr(path, '.'); if (dot) strcpy_s(dot, path + MAX_PATH - dot, ".ini");
+    ShotInit(path);
     auto get = [&](const char* k, int def) { return (int)GetPrivateProfileIntA("Controller", k, def, path); };
     cfg.stickDeadzone = get("StickDeadzone", cfg.stickDeadzone);
     cfg.triggerThreshold = get("TriggerThreshold", cfg.triggerThreshold);
@@ -427,6 +430,7 @@ static void LoadConfig(HMODULE self) {
     g_hudFix = (int)GetPrivateProfileIntA("Controller", "HUDScaleFix", 1, path);
     g_menuScalePct = (int)GetPrivateProfileIntA("Controller", "MenuScale", 90, path);
     g_hudScalePct = (int)GetPrivateProfileIntA("Controller", "HUDScale", 75, path);
+    g_forceWindowed = (int)GetPrivateProfileIntA("Controller", "ForceWindowed", 0, path);
     if (g_menuScalePct < 10 || g_menuScalePct > 200) g_menuScalePct = 90;
     if (g_hudScalePct < 10 || g_hudScalePct > 200) g_hudScalePct = 75;
     g_soundFix = (int)GetPrivateProfileIntA("Controller", "MenuSoundVolumeFix", 1, path);
@@ -451,6 +455,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         PauseSaveInstall();
         UiFixInstall();
         HudFixInstall();
+        ForceWindowedInstall();
         SoundFixInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);

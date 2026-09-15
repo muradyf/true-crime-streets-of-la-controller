@@ -114,6 +114,8 @@ controller and input values to `scripts\TrueCrimeDualSense.log` when reporting a
 | `Font_UI_Small.fnt` | Only font with the Xbox button glyphs (`0x80–0x83`, `0xA2–0xA7`); redrawn as PlayStation symbols by `tools\patch_font.py`. |
 | `0x5FE480` | Vibration output, an empty `ret 8` on PC; called by the vibration manager (`0x551350`). |
 | `0x61DBC0` / `0x61DC2B` | Direct3D 8 device create/reset; dereferenced the device without checking `CreateDevice`. Patched to check and retry (keeps the Widescreen Fix hook at `0x61DC12`); while the game window is inactive (alt-tab, lock screen) `CreateDevice` returns `D3DERR_DEVICELOST`, so it waits for the window to be active again. |
+| `0x54EFAD` | Crash at any resolution other than the desktop's (also without mods): vertices are written into a locked vertex buffer with `movaps`, which needs 16-byte alignment the lock pointer doesn't always have. The four writes are changed to `movups`. |
+| `0x6216C4` | `[Renderer] Windowed` is read with a registry flag but no registry key is ever opened, so it always falls back to 0 and is written back to the ini. `ForceWindowed=1` (debug) changes that default to 1. |
 | `0x6125F0` | Device release-and-recreate, called from the main loop, resolution change and `WM_ACTIVATEAPP` (`0x61286B`). Guarded against re-entry from messages pumped during the wait. |
 | `0x6AF6F0` | Pause-menu item table; a fifth item opens the manual save screen (screen 3). |
 | `0x5515A0` / `0x551570` | UI scale (`0x6AEA00/04`, set once to 1.0) and safe rect (`0x7280F0..FC`). Hooked: scale = height / 480, safe-rect margins scaled to match. |
