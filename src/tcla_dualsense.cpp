@@ -75,6 +75,7 @@ static PadState g_dsState;
 static ULONGLONG g_nextOpenTry = 0;
 
 #include "extras.h"
+#include "device_profile.h"
 #include "device_fix.h"
 #include "pause_save.h"
 #include "ui_fix.h"
@@ -429,6 +430,7 @@ static void LoadConfig(HMODULE self) {
     g_soundTrace = (int)GetPrivateProfileIntA("Controller", "SoundTrace", 0, path);
     g_d3dTrace = (int)GetPrivateProfileIntA("Controller", "D3DTrace", 0, path);
     g_logCreateState = g_d3dTrace;
+    g_deviceProfile = (int)GetPrivateProfileIntA("Controller", "DeviceProfile", 0, path);
     g_borderless = (int)GetPrivateProfileIntA("Controller", "BorderlessFullscreen", 1, path);
     BorderlessDecide();
     if (g_menuScalePct < 10 || g_menuScalePct > 200) g_menuScalePct = 90;

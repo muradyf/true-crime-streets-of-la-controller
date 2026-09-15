@@ -153,6 +153,9 @@ static void __cdecl DeviceStep(int id) {
         dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency, extra);
     g_stepLast = now;
     if (id == 6 || id == 1) g_firstFrameAfterRecreate = 1;
+    if (id == 10) DeviceProfilePhase(1);
+    else if (id == 11 || id == 6) DeviceProfilePhase(0);
+    else if (id == 1) DeviceProfilePhase(2);
 }
 static void DeviceFirstFrameCheck() {                        // called from the per-frame input update
     if (!g_firstFrameAfterRecreate || g_inRecreate) return;
