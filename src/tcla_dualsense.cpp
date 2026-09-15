@@ -358,6 +358,7 @@ static void __cdecl HookedInputUpdate() {
     DisplayFixUpdate();
     D3DTraceUpdate();
     DeviceFirstFrameCheck();
+    FrameGapCheck();
     RestorePollUpdate();
     MergePad();
 }

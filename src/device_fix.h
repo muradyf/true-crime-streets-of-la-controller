@@ -302,6 +302,13 @@ static void __cdecl DeviceStep(int id) {
     else if (id == 11 || id == 6) DeviceProfilePhase(0);
     else if (id == 1) DeviceProfilePhase(2);
 }
+// Any stall the player actually feels shows up as a gap between input updates, whether or not the device was rebuilt.
+static double g_lastFrameMs = 0;
+static void FrameGapCheck() {
+    double now = QpcMs();
+    if (g_lastFrameMs && now - g_lastFrameMs > 250) Log("frame gap %.0f ms", now - g_lastFrameMs);
+    g_lastFrameMs = now;
+}
 static void DeviceFirstFrameCheck() {                        // called from the per-frame input update
     if (!g_firstFrameAfterRecreate || g_inRecreate) return;
     g_firstFrameAfterRecreate = 0;
