@@ -327,11 +327,55 @@ __declspec(naked) static void TimedRestore5ED5A0() {         // call 0x5ED5A0 (t
     }
 }
 
-__declspec(naked) static void TimedRelease() {               // call 0x6125C0 at 0x61288D (WM_ACTIVATEAPP deactivate)
-    DEVICE_STEP(20)
-    __asm { call fn_6125C0 }
-    DEVICE_STEP(21)
-    __asm { ret }
+// Alt-tab rebuild. The main loop (0x4E6380) releases every device resource when the window is deactivated (state 0:
+// drain streams 0x60E290, release 0x6125C0) and, when it is activated again (state 2), drains, re-creates the device
+// and reloads every resource from disk (0x6125F0). WM_ACTIVATEAPP (0x61288D / 0x6128C7) has the same pair. A device
+// that is still usable after the window was in the background does not need any of that.
+// KeepDeviceOnAltTab=1 (default): deactivate keeps the device and resources; on activate TestCooperativeLevel decides:
+// D3D_OK skips the rebuild, anything else (a lost exclusive-fullscreen device) runs the original release and re-create
+// then, which is the same work in the same order, only later.
+static int g_keepDevice = 1;
+static bool g_releaseSkipped = false, g_keepOk = false;
+static HRESULT DeviceTcl() {
+    void* dev = *(void**)0x72C014;
+    if (!dev) return E_FAIL;
+    return ((HRESULT(__stdcall*)(void*))(*(void***)dev)[3])(dev);
+}
+static void ReleaseTimed() { DeviceStep(20); ((void(__cdecl*)())0x6125C0)(); DeviceStep(21); }
+static void __cdecl KeepDeactivateDrain() {                  // call 0x60E290 at 0x4E63B9
+    if (g_keepDevice && *(void**)0x72C014) return;
+    ((void(__cdecl*)())0x60E290)();
+}
+static void __cdecl KeepDeactivateRelease() {                // call 0x6125C0 at 0x4E63BE and 0x61288D
+    if (g_keepDevice && *(void**)0x72C014) {
+        if (!g_releaseSkipped) Log("alt-tab out: device and resources kept (TestCooperativeLevel 0x%08lX)", DeviceTcl());
+        g_releaseSkipped = true;
+        return;
+    }
+    ReleaseTimed();
+}
+static void KeepDecide() {
+    g_keepOk = false;
+    if (!g_releaseSkipped) return;
+    HRESULT tcl = DeviceTcl();
+    g_keepOk = tcl == 0;
+    Log("alt-tab back: TestCooperativeLevel 0x%08lX -> %s", tcl, g_keepOk ? "device kept, no rebuild" : "device lost, release and re-create");
+}
+static void __cdecl KeepActivateDrain() {                    // call 0x60E290 at 0x4E63D4
+    KeepDecide();
+    if (!g_keepOk) ((void(__cdecl*)())0x60E290)();
+}
+static void __cdecl KeepActivateRecreate() {                 // call 0x6125F0 at 0x4E63D9
+    if (g_releaseSkipped) {
+        g_releaseSkipped = false;
+        if (g_keepOk) return;
+        ReleaseTimed();
+    }
+    ((void(__cdecl*)())0x6125F0)();
+}
+static void __cdecl KeepWndRecreate() {                      // call 0x6125F0 at 0x6128C7 (WM_ACTIVATEAPP activate)
+    KeepDecide();
+    KeepActivateRecreate();
 }
 
 static void RedirectCall(DWORD site, DWORD expectedTarget, void* fn, const char* what) {
@@ -380,7 +424,14 @@ static void DeviceFixInstall() {
         } else Log("device re-create entry bytes differ, re-entry guard not installed");
         RedirectCall(0x608D36, 0x61DBC0, &TimedCreateDevice, "CreateDevice timing (0x608D36)");
         RedirectCall(0x608DDE, 0x5ED5A0, &TimedRestore5ED5A0, "restore timing (0x608DDE)");
-        RedirectCall(0x61288D, 0x6125C0, &TimedRelease, "release timing (0x61288D)");
+        g_keepDevice = (int)GetPrivateProfileIntA("Controller", "KeepDeviceOnAltTab", 1, g_dwmIniPath);
+        RedirectCall(0x61288D, 0x6125C0, &KeepDeactivateRelease, "alt-tab release (0x61288D)");
+        RedirectCall(0x6128C7, 0x6125F0, &KeepWndRecreate, "alt-tab re-create (0x6128C7)");
+        RedirectCall(0x4E63B9, 0x60E290, &KeepDeactivateDrain, "alt-tab drain (0x4E63B9)");
+        RedirectCall(0x4E63BE, 0x6125C0, &KeepDeactivateRelease, "alt-tab release (0x4E63BE)");
+        RedirectCall(0x4E63D4, 0x60E290, &KeepActivateDrain, "alt-tab drain (0x4E63D4)");
+        RedirectCall(0x4E63D9, 0x6125F0, &KeepActivateRecreate, "alt-tab re-create (0x4E63D9)");
+        Log("alt-tab handling installed, KeepDeviceOnAltTab=%d", g_keepDevice);
     }
     BYTE* site = (BYTE*)0x61DC2B;
     const BYTE expected[] = { 0x8B, 0x06, 0x8B, 0x10, 0x50, 0xFF, 0x52, 0x10 };   // mov eax,[esi]; mov edx,[eax]; push eax; call [edx+10]
