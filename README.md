@@ -26,6 +26,7 @@ fully analog.
 | Separate menu and HUD size settings (`MenuScale`, `HUDScale`, percent of filling the screen height; defaults 90 / 75) | tested (2560×1600: 3.0× / 2.5×) |
 | Movies, the startup loading screen and the menu background drawn at 4:3 with black bars instead of stretched; menu items kept inside the 4:3 frame; city map keeps its proportions | tested (2560×1600, compared with 1024×768 PC screenshots) |
 | First menu sound follows the SFX volume (it was hard-coded above maximum) | tested (memory read) |
+| Options → Display lists the monitor's resolutions (the game offered only five 4:3 sizes up to 1280×960); Apply saves the choice for the next start; MENU SIZE / HUD SIZE rows step the UI sizes live | tested (list, apply + restart at 1920×1080, menu size live) |
 
 ## Requirements
 
@@ -126,6 +127,7 @@ controller and input values to `scripts\TrueCrimeDualSense.log` when reporting a
 | `0x6216C4` | `[Renderer] Windowed` is read with a registry flag but no registry key is ever opened, so it always falls back to 0 and is written back to the ini. `ForceWindowed=1` (debug) changes that default to 1. |
 | `0x6125F0` | Device release-and-recreate, called from the main loop, resolution change and `WM_ACTIVATEAPP` (`0x61286B`). Guarded against re-entry from messages pumped during the wait. |
 | `0x6AF6F0` | Pause-menu item table; a fifth item opens the manual save screen (screen 3). |
+| `0x61D995` / `0x6B16C8` / `0x571555` / `0x6AF67C` | Options → Display. The renderer kept only D3D modes matching a 15-entry table (`0x68D5A8`: 640×480 … 1280×960 × 16/24/32 bits) and the menu listed a 5-entry table; both now use every size ≥ 640×480 (menu: up to 16, desktop shape, 16:9 and classic 4:3 first). The Widescreen Fix NOPs the size writes of Apply and forces the back buffer size at `0x61DC12`, so Apply writes `TrueCrime.ini` and the fix's `ResX`/`ResY` for the next start. Adapter is greyed by the game when D3D reports one adapter. Two rows appended to the Display item table (text ids `0xD70`/`0xD71`) cycle `MenuScale`/`HUDScale`. |
 | `0x5515A0` / `0x551570` | UI scale (`0x6AEA00/04`, set once to 1.0) and safe rect (`0x7280F0..FC`). Hooked: scale = height / 480, safe rect placed inside the centred 640×480 box with scaled margins, so right-aligned menu items line up with the logo and art instead of the real screen edge. |
 | `0x4CB74D` | Unanchored UI X (`xor ecx,ecx`); offset by `(width − height·4/3) / 2` so full-layout screens are centred. |
 | `0x4DD720` / `0x609FD0` | HUD render thunk and 2D batch flush. The HUD sizes are raw 640×480 pixels, so the HUD pass runs in a virtual 480-high space (scale 1.0, screen and safe rect divided by height/480) and its pre-transformed vertices are multiplied back at flush. |

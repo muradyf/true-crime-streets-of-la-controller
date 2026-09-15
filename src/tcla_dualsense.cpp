@@ -85,6 +85,7 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "borderless.h"
 #include "controller_map.h"
 #include "remap_screen.h"
+#include "display_fix.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -377,6 +378,7 @@ static void __cdecl HookedInputUpdate() {
     UiFixUpdate();
     ShotUpdate();
     RemapTitlesUpdate();
+    DisplayFixUpdate();
     D3DTraceUpdate();
     DeviceFirstFrameCheck();
     MergePad();
@@ -432,6 +434,7 @@ static void LoadConfig(HMODULE self) {
     if (g_menuScalePct < 10 || g_menuScalePct > 200) g_menuScalePct = 90;
     if (g_hudScalePct < 10 || g_hudScalePct > 200) g_hudScalePct = 75;
     g_soundFix = (int)GetPrivateProfileIntA("Controller", "MenuSoundVolumeFix", 1, path);
+    DisplayFixLoadConfig(path);
     cfg.debugLog = get("DebugLog", cfg.debugLog);
     if (dot) { strcpy_s(dot, path + MAX_PATH - dot, ".log"); g_log = _fsopen(path, "w", _SH_DENYNO); }   // readable while the game runs
 }
@@ -457,6 +460,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         BorderlessInstall();
         RemapScreenInstall();
         SoundFixInstall();
+        DisplayFixInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);
         ExtrasShutdown();
