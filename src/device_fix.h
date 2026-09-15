@@ -223,7 +223,41 @@ static void RestorePollUpdate() {
         g_pollTotalQpc = 0;
     g_pollLastCtrl = ctrl;
 }
+// The other half of the wait: the file-reading thread (0x60DCF0) takes a request from the queue, reads it, and when
+// the queue is empty sleeps 10 ms (0x60DE4C) before looking again. So each restored resource costs up to a 10 ms
+// sleep, whatever the reader does. Measured under dgVoodoo: the restore phase took ~690 ms either way until this
+// site was patched too. While requests keep coming the thread now yields instead, and it backs off to 1 ms and then
+// 10 ms sleeps once it has been idle for a while, so an idle game does not spin.
+static LARGE_INTEGER g_workIdleStreak = {}, g_workIdleLast = {};
+static void __cdecl WorkerIdle() {
+    if (!g_restorePollFix) { Sleep(10); return; }
+    LARGE_INTEGER now; QueryPerformanceCounter(&now);
+    if (!g_pollFreq.QuadPart) QueryPerformanceFrequency(&g_pollFreq);
+    LONGLONG ms = g_pollFreq.QuadPart / 1000;
+    if (!g_workIdleStreak.QuadPart || now.QuadPart - g_workIdleLast.QuadPart > 20 * ms) g_workIdleStreak = now;   // work happened in between
+    g_workIdleLast = now;
+    LONGLONG idle = now.QuadPart - g_workIdleStreak.QuadPart;
+    if (idle < 300 * ms) { if (!SwitchToThread()) YieldProcessor(); }
+    else if (idle < 2000 * ms) Sleep(1);
+    else Sleep(10);
+    QueryPerformanceCounter(&g_workIdleLast);
+}
+
 static void RestorePollInstall() {
+    {
+        BYTE* w = (BYTE*)0x60DE4C;
+        const BYTE orig[] = { 0x6A, 0x0A, 0xFF, 0x15, 0x54, 0x60, 0x67, 0x00, 0xE9 };   // push 10; call [Sleep]; jmp 0x60DD00
+        if (memcmp(w, orig, sizeof(orig))) Log("file thread idle bytes differ, fix not installed");
+        else {
+            DWORD old;
+            VirtualProtect(w, 8, PAGE_EXECUTE_READWRITE, &old);
+            w[0] = 0xE8; *(int*)(w + 1) = (int)((BYTE*)&WorkerIdle - (w + 5));
+            w[5] = w[6] = w[7] = 0x90;
+            VirtualProtect(w, 8, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), w, 8);
+            Log("file thread idle hook installed (0x60DE4C)");
+        }
+    }
     BYTE* p = (BYTE*)0x60E0CE;
     const BYTE orig[] = { 0x6A, 0x05, 0xFF, 0x15, 0x54, 0x60, 0x67, 0x00, 0xEB, 0xD8 };   // push 5; call [Sleep]; jmp 0x60E0B0
     if (memcmp(p, orig, sizeof(orig))) { Log("restore poll bytes differ, fix not installed"); return; }
