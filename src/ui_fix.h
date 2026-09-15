@@ -156,6 +156,25 @@ __declspec(naked) static void BackgroundRectStub() {        // replaces call 0x4
     }
 }
 
+// City map marker origin: x0 (int, screen px) / sx. Stack slots as at the replaced instruction.
+__declspec(naked) static void MapMarkerOriginStubA() {      // replaces 0x4D5ED0 in render 0x4D5BAD: x0 [esp+38h], sx [esp+34h]
+    __asm {
+        cvtsi2ss xmm1, dword ptr [esp + 0x38]
+        divss xmm1, dword ptr [esp + 0x34]
+        push 0x4D5ED6
+        ret
+    }
+}
+
+__declspec(naked) static void MapMarkerOriginStubB() {      // replaces 0x4D879D in render 0x4D8460: x0 [esp+7Ch], sx [esp+3Ch]
+    __asm {
+        cvtsi2ss xmm1, dword ptr [esp + 0x7C]
+        divss xmm1, dword ptr [esp + 0x3C]
+        push 0x4D87A3
+        ret
+    }
+}
+
 static bool PatchBytes(DWORD site, const BYTE* bytes, size_t len) {
     DWORD old;
     if (!VirtualProtect((LPVOID)site, len, PAGE_EXECUTE_READWRITE, &old)) return false;
@@ -225,6 +244,21 @@ static void MenuArtFixInstall() {
         ++mapSites;
     }
     Log("city map aspect fix installed (%d of 2 sites)", mapSites);
+
+    // Map markers (player, destinations) are placed at ((x0 + c + u) * sx, ...), where x0 is the map's left edge in
+    // screen pixels. With sx = W/640 x0 was always 0, so the pixel/unit mix never showed; with the centred map it
+    // pushed markers off the right side. Divide x0 by sx where it enters the origin vector.
+    if (mapSites == 2) {
+        const BYTE x0Ped[] = { 0xF3, 0x0F, 0x2A, 0x4C, 0x24, 0x38 };     // 0x4D5ED0: cvtsi2ss xmm1,[esp+38h]
+        const BYTE x0Pause[] = { 0xF3, 0x0F, 0x2A, 0x4C, 0x24, 0x7C };   // 0x4D879D: cvtsi2ss xmm1,[esp+7Ch]
+        if (memcmp((BYTE*)0x4D5ED0, x0Ped, sizeof(x0Ped)) || memcmp((BYTE*)0x4D879D, x0Pause, sizeof(x0Pause))) {
+            Log("city map marker origin bytes differ, marker fix not installed");
+        } else {
+            WriteJmp(0x4D5ED0, &MapMarkerOriginStubA, sizeof(x0Ped));
+            WriteJmp(0x4D879D, &MapMarkerOriginStubB, sizeof(x0Pause));
+            Log("city map marker origin fix installed (0x4D5ED0, 0x4D879D)");
+        }
+    }
 }
 
 static void __cdecl AdjustMovieRect(float* a) {             // a = x0, y0, x1, y1
