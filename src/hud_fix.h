@@ -1,18 +1,28 @@
-// In-game HUD scaling.
+// In-game HUD and episode-map scaling.
 //
 // The HUD master render 0x4DA780 (reached only through the cdecl thunk 0x4DD720, draws only when p2 == 4) positions
 // elements with the anchor helpers (scale [0x6AEA00] + safe rect) or with GetScreenW/H (0x6089F0/0x608A00) minus
 // 640x480-pixel offsets, but every size is a raw 640x480 pixel constant. So at high resolutions it stays tiny.
+// The episode-select screen (render 0x568390, vtable slot 0x68207C) has the same bug for its episode map: node
+// icons (0x566D70) and bullet/trail images (0x559D10) go through the rect builder 0x4CB7F0, which scales positions
+// by [0x6AEA00] but not sizes.
 //
-// Fix: run the HUD pass in a virtual space of height 480 (width W/s, scale 1.0, safe rect /s), then multiply the
+// Fix: run these passes in a virtual space of height 480 (width W/s, scale 1.0, safe rect /s), then multiply the
 // pre-transformed vertices by s when each 2D batch is flushed (0x609FD0; batch +0x10 = vertex buffer whose +0x28 is
 // the locked start, batch +0x14 = write pointer, 0x24 bytes per vertex, x at +0, y at +4, writers subtract 0.5).
+// Text inside a pass takes its size from [0x6AEA00] and its position from the anchors, so it keeps its size.
 #pragma once
 
 static int g_hudFix = 1;
 static int g_inHud = 0;
 static float g_hudScale = 1.0f;
-static bool g_hudLogged = false;
+
+struct VirtualUiState {
+    bool active = false;
+    int w = 0, h = 0, offX = 0;
+    float scaleX = 1.0f, scaleY = 1.0f;
+    int rect[4] = {};
+};
 
 static void __cdecl ScaleHudBatch(DWORD* batch) {
     DWORD* vb = (DWORD*)batch[0x10 / 4];
@@ -47,40 +57,58 @@ __declspec(naked) static void HudFlushStub() {              // replaces 0x609FD0
     }
 }
 
-static void __cdecl HudRenderHook(void* self, int a, int b, int c, int d) {   // replaces cdecl thunk 0x4DD720
-    auto render = (void(__fastcall*)(void*, void*, int, int, int, int))0x4DA780;   // thiscall, ret 0x10
+static void BeginVirtualUi(VirtualUiState& st, const char* name) {
     int w = ScreenW(), h = ScreenH();
-    if (!g_hudFix || a != 4 || h <= 480) { render(self, nullptr, a, b, c, d); return; }
-
+    if (!g_hudFix || g_inHud || h <= 480) return;          // nested passes keep the outer virtual space
     float s = h / 480.0f;
-    float scaleX = *(float*)0x6AEA00, scaleY = *(float*)0x6AEA04;
-    int rect[4]; memcpy(rect, (void*)0x7280F0, sizeof(rect));
-    int offX = g_uiOffX;
+    st.active = true;
+    st.w = w; st.h = h; st.offX = g_uiOffX;
+    st.scaleX = *(float*)0x6AEA00; st.scaleY = *(float*)0x6AEA04;
+    memcpy(st.rect, (void*)0x7280F0, sizeof(st.rect));
 
     *(float*)0x6AEA00 = 1.0f;
     *(float*)0x6AEA04 = 1.0f;
-    for (int i = 0; i < 4; ++i) *(int*)(0x7280F0 + i * 4) = (int)(rect[i] / s + 0.5f);
+    for (int i = 0; i < 4; ++i) *(int*)(0x7280F0 + i * 4) = (int)(st.rect[i] / s + 0.5f);
     *(int*)0x6B9B98 = (int)(w / s + 0.5f);
     *(int*)0x6B9B9C = 480;
-    g_uiOffX = (int)(offX / s + 0.5f);
+    g_uiOffX = (int)(st.offX / s + 0.5f);
     g_hudScale = s;
+    g_inHud = 1;
 
-    if (!g_hudLogged) {
-        g_hudLogged = true;
-        Log("HUD pass: virtual %dx480, safe rect %d,%d-%d,%d, scale %.3f",
+    static unsigned loggedMask = 0;
+    unsigned bit = name[0] == 'H' ? 1u : 2u;
+    if (!(loggedMask & bit)) {
+        loggedMask |= bit;
+        Log("%s pass: virtual %dx480, safe rect %d,%d-%d,%d, scale %.3f", name,
             *(int*)0x6B9B98, *(int*)0x7280F0, *(int*)0x7280F8, *(int*)0x7280F4, *(int*)0x7280FC, s);
     }
+}
 
-    g_inHud = 1;
-    render(self, nullptr, a, b, c, d);
+static void EndVirtualUi(const VirtualUiState& st) {
+    if (!st.active) return;
     g_inHud = 0;
+    *(int*)0x6B9B98 = st.w;
+    *(int*)0x6B9B9C = st.h;
+    memcpy((void*)0x7280F0, st.rect, sizeof(st.rect));
+    *(float*)0x6AEA00 = st.scaleX;
+    *(float*)0x6AEA04 = st.scaleY;
+    g_uiOffX = st.offX;
+}
 
-    *(int*)0x6B9B98 = w;
-    *(int*)0x6B9B9C = h;
-    memcpy((void*)0x7280F0, rect, sizeof(rect));
-    *(float*)0x6AEA00 = scaleX;
-    *(float*)0x6AEA04 = scaleY;
-    g_uiOffX = offX;
+static void __cdecl HudRenderHook(void* self, int a, int b, int c, int d) {   // replaces cdecl thunk 0x4DD720
+    auto render = (void(__fastcall*)(void*, void*, int, int, int, int))0x4DA780;   // thiscall, ret 0x10
+    VirtualUiState st;
+    if (a == 4) BeginVirtualUi(st, "HUD");
+    render(self, nullptr, a, b, c, d);
+    EndVirtualUi(st);
+}
+
+static void __fastcall EpisodeScreenRenderHook(void* self, void*, void* batch) {  // vtable slot 0x68207C (thiscall, ret 4)
+    auto render = (void(__fastcall*)(void*, void*, void*))0x568390;
+    VirtualUiState st;
+    BeginVirtualUi(st, "episode map");
+    render(self, nullptr, batch);
+    EndVirtualUi(st);
 }
 
 static void HudFixInstall() {
@@ -96,4 +124,15 @@ static void HudFixInstall() {
     WriteJmp(0x4DD720, &HudRenderHook, 5);
     WriteJmp(0x609FD0, &HudFlushStub, 6);
     Log("HUD scale fix installed (0x4DD720, 0x609FD0)");
+
+    DWORD* slot = (DWORD*)0x68207C;
+    if (*slot == 0x568390) {
+        DWORD old;
+        VirtualProtect(slot, 4, PAGE_READWRITE, &old);
+        *slot = (DWORD)&EpisodeScreenRenderHook;
+        VirtualProtect(slot, 4, old, &old);
+        Log("episode map scale fix installed (vtable 0x68207C)");
+    } else {
+        Log("episode screen vtable slot differs (0x%08lX), episode map fix not installed", *slot);
+    }
 }

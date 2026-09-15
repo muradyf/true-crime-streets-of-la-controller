@@ -22,7 +22,7 @@ fully analog.
 | Fix for the crash when the game re-creates its graphics device (e.g. after a mission) | experimental |
 | "save game" option in the pause menu | experimental |
 | Menus, HUD and text scaled for high resolutions; full-screen layouts centred in 4:3 | tested (2560×1600 menus) |
-| In-game HUD (portrait, street sign, radar, meters) scaled with the screen height | tested (2560×1600 gameplay) |
+| In-game HUD (portrait, street sign, radar, meters) and the episode-select map scaled with the screen height | tested (2560×1600) |
 | Movies drawn at 4:3 with black bars instead of stretched | experimental |
 | First menu sound follows the SFX volume (it was hard-coded above maximum) | tested (memory read) |
 
@@ -118,6 +118,7 @@ controller and input values to `scripts\TrueCrimeDualSense.log` when reporting a
 | `0x5515A0` / `0x551570` | UI scale (`0x6AEA00/04`, set once to 1.0) and safe rect (`0x7280F0..FC`). Hooked: scale = height / 480, safe-rect margins scaled to match. |
 | `0x4CB74D` | Unanchored UI X (`xor ecx,ecx`); offset by `(width − height·4/3) / 2` so full-layout screens are centred. |
 | `0x4DD720` / `0x609FD0` | HUD render thunk and 2D batch flush. The HUD sizes are raw 640×480 pixels, so the HUD pass runs in a virtual 480-high space (scale 1.0, screen and safe rect divided by height/480) and its pre-transformed vertices are multiplied back at flush. |
+| `0x68207C` → `0x568390` | Episode-select screen render (vtable slot). Its map icons and bullet/trail images have scaled positions but raw sizes; wrapped in the same virtual pass. |
 | `0x60E88B` | Bink movie quad drawn at `0,0,W,H`; narrowed to 4:3 after clearing the screen to black. |
 | `0x4E71E8` | Sound init sets the menu category (`0x20`) to 0.65 before the ini volumes are applied; the SFX slider maps 0–10 to 0–0.585. The volumes are now applied right after it. |
 
