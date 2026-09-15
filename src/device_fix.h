@@ -182,8 +182,46 @@ static void D3d8TransitionWaitInstall() {
     Log("d3d8 transition wait pattern not found, hook not installed");
 }
 
+// Restore after a re-create (0x610070) reloads each device resource from disk: 0x607150 opens an async stream slot
+// (0x60E230), queues the read (0x60DF30) and waits in 0x60E0A0, which polls the slot's pending count with Sleep(5).
+// Each poll sleeps at least one scheduler tick, so ~60 resources cost ~0.7 s while the reads themselves are cached.
+// RestorePollFix=1 replaces that Sleep(5) (0x60E0CE, also used while loading levels) with a yield for the first 2 ms
+// of a wait and Sleep(1) after that. The pending count is still polled the same way, so behaviour is unchanged.
+static int g_restorePollFix = 1;
+static char g_restorePollIni[MAX_PATH] = "";
+static volatile LONG g_pollCalls = 0;
+static LARGE_INTEGER g_pollFreq = {}, g_pollLast = {}, g_pollWaitStart = {};
+static void __cdecl RestorePoll() {
+    InterlockedIncrement(&g_pollCalls);
+    if (!g_restorePollFix) { Sleep(5); return; }
+    LARGE_INTEGER now; QueryPerformanceCounter(&now);
+    if (!g_pollFreq.QuadPart) QueryPerformanceFrequency(&g_pollFreq);
+    if ((now.QuadPart - g_pollLast.QuadPart) * 1000 > g_pollFreq.QuadPart * 20) g_pollWaitStart = now;   // a new wait
+    g_pollLast = now;
+    if ((now.QuadPart - g_pollWaitStart.QuadPart) * 1000 < g_pollFreq.QuadPart * 2) { if (!SwitchToThread()) YieldProcessor(); }
+    else Sleep(1);
+    QueryPerformanceCounter(&g_pollLast);
+}
+static void RestorePollInstall() {
+    BYTE* p = (BYTE*)0x60E0CE;
+    const BYTE orig[] = { 0x6A, 0x05, 0xFF, 0x15, 0x54, 0x60, 0x67, 0x00, 0xEB, 0xD8 };   // push 5; call [Sleep]; jmp 0x60E0B0
+    if (memcmp(p, orig, sizeof(orig))) { Log("restore poll bytes differ, fix not installed"); return; }
+    DWORD old;
+    VirtualProtect(p, 8, PAGE_EXECUTE_READWRITE, &old);
+    p[0] = 0xE8; *(int*)(p + 1) = (int)((BYTE*)&RestorePoll - (p + 5));
+    p[5] = p[6] = p[7] = 0x90;
+    VirtualProtect(p, 8, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), p, 8);
+    Log("restore poll hook installed (0x60E0CE), RestorePollFix=%d", g_restorePollFix);
+}
+
 static void __cdecl DeviceStep(int id) {
     if (id == 10) D3d8TransitionWaitInstall();
+    if (id == 0) {
+        g_restorePollFix = (int)GetPrivateProfileIntA("Controller", "RestorePollFix", 1, g_dwmIniPath);   // re-read for A/B tests
+        g_pollCalls = 0;
+    }
+    if (id == 6) Log("restore polls during re-create: %ld (RestorePollFix=%d)", (long)g_pollCalls, g_restorePollFix);
     static const char* const names[] = {
         /*0*/ "re-create start", "0x608D30 create + render states", "0x5EC120 restore", "0x60FEF0", "0x4E5740 restore",
         /*5*/ "0x610070 restore", "0x60FF20", "", "", "",
@@ -328,6 +366,7 @@ static void VertexAlignFixInstall() {
 static void DeviceFixInstall() {
     if (!g_deviceFix) { Log("graphics device crash fix disabled in ini"); return; }
     VertexAlignFixInstall();
+    RestorePollInstall();
     {
         BYTE* g = (BYTE*)0x6125F0;
         const BYTE callCreate[] = { 0xE8, 0x3B, 0x67, 0xFF, 0xFF };                // call 0x608D30
