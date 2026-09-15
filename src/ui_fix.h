@@ -129,10 +129,21 @@ __declspec(naked) static void StreakYStub() {               // replaces 0x55B10D
 // Shell background (ShellBG.xpr, [0x728338]): the shell manager draws it with 0x4CB1A0(dst, src, 1.0) at 0x55DEBA and
 // 0x55DFAC, dst = {0, 0, W+1, H+1} (short x, y, w, h), i.e. stretched. The art is 4:3 and composed with the
 // 640x480 layout, so draw it in the centred 4:3 box and clear the side bars to black.
-static void __cdecl AdjustBackgroundRect(short* r) {
+// Returns 1 when the draw is skipped: the PS2-look city map hides the background (citymap_look.h).
+static bool __cdecl CityMapHidesShellBackground();
+static int __cdecl AdjustBackgroundRect(short* r) {
     int x = r[0], y = r[1], w = r[2], h = r[3];
+    if (CityMapHidesShellBackground()) {
+        void* dev = *(void**)0x72C014;
+        if (dev) {
+            LONG full[4] = { x, y, x + w, y + h };
+            void** vt = *(void***)dev;
+            ((HRESULT(__stdcall*)(void*, DWORD, void*, DWORD, DWORD, float, DWORD))vt[0x90 / 4])(dev, 1, full, 1 /*TARGET*/, 0xFF000000, 1.0f, 0);
+        }
+        return 1;
+    }
     int target = (h * 4 + 1) / 3;
-    if (target >= w - 1) return;
+    if (target >= w - 1) return 0;
     int nx = x + (w - target) / 2;
     r[0] = (short)nx;
     r[2] = (short)target;
@@ -142,6 +153,7 @@ static void __cdecl AdjustBackgroundRect(short* r) {
         void** vt = *(void***)dev;
         ((HRESULT(__stdcall*)(void*, DWORD, void*, DWORD, DWORD, float, DWORD))vt[0x90 / 4])(dev, 2, bars, 1 /*TARGET*/, 0xFF000000, 1.0f, 0);
     }
+    return 0;
 }
 
 __declspec(naked) static void BackgroundRectStub() {        // replaces call 0x4CB1A0 (thiscall, dst*, src*, float)
@@ -150,9 +162,14 @@ __declspec(naked) static void BackgroundRectStub() {        // replaces call 0x4
         push dword ptr [esp + 0x24]                         // dst (after pushad 32 bytes + return address)
         call AdjustBackgroundRect
         add esp, 4
+        mov [esp + 0x1C], eax                               // popad restores it into eax
         popad
+        test eax, eax
+        jnz skip
         mov eax, 0x4CB1A0
         jmp eax
+    skip:
+        ret 0x0C                                            // 0x4CB1A0 is thiscall with 3 arguments
     }
 }
 
