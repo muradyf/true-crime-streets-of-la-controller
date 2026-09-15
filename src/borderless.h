@@ -1,4 +1,4 @@
-// Borderless fullscreen (BorderlessFullscreen=1, default).
+// Borderless fullscreen: BorderlessFullscreen=1 (default) at resolutions other than the desktop's, 2 = always.
 //
 // Exclusive fullscreen at a non-desktop mode renders black: the device comes back from CreateDevice already lost
 // (TestCooperativeLevel D3DERR_DEVICENOTRESET immediately after 0x61DC28, game in the foreground, no other topmost
@@ -9,7 +9,7 @@
 // no refresh-rate change; measured with the device step log). A windowed device is created in ~100 ms and is not
 // released on alt-tab at all.
 //
-// So at every resolution: run windowed (ForceWindowed patch, shot.h), make the window a borderless popup covering the
+// So when enabled: run windowed (ForceWindowed patch, shot.h), make the window a borderless popup covering the
 // monitor, create the device with D3DSWAPEFFECT_COPY (required for a destination rectangle), and Present the back
 // buffer scaled into an aspect-correct rectangle with black bars (1:1 at the desktop resolution).
 #pragma once
@@ -40,7 +40,7 @@ static void BorderlessDecide() {
     } else {
         w = GetPrivateProfileIntA("Renderer", "ScreenWidth", g_deskW, gameIni); h = GetPrivateProfileIntA("Renderer", "ScreenHeight", g_deskH, gameIni);
     }
-    if (!g_borderless) return;
+    if (!g_borderless || (g_borderless == 1 && w == g_deskW && h == g_deskH)) return;   // 2 = also at the desktop resolution
     g_borderlessActive = true;
     g_forceWindowed = 1;
     Log("borderless fullscreen: %dx%d on a %dx%d desktop", w, h, g_deskW, g_deskH);
