@@ -500,7 +500,9 @@ static void DeviceFixInstall() {
         } else Log("device re-create entry bytes differ, re-entry guard not installed");
         RedirectCall(0x608D36, 0x61DBC0, &TimedCreateDevice, "CreateDevice timing (0x608D36)");
         RedirectCall(0x608DDE, 0x5ED5A0, &TimedRestore5ED5A0, "restore timing (0x608DDE)");
-        g_keepDevice = (int)GetPrivateProfileIntA("Controller", "KeepDeviceOnAltTab", 1, g_dwmIniPath);
+        // Default off: on the native d3d8 this crashes (0xC0000005 inside d3d8.dll right after CreateDevice) when the
+        // kept device is not resettable and the code falls back to release + re-create. Only dgVoodoo survived that path.
+        g_keepDevice = (int)GetPrivateProfileIntA("Controller", "KeepDeviceOnAltTab", 0, g_dwmIniPath);
         RedirectCall(0x61288D, 0x6125C0, &KeepDeactivateRelease, "alt-tab release (0x61288D)");
         RedirectCall(0x6128C7, 0x6125F0, &KeepWndRecreate, "alt-tab re-create (0x6128C7)");
         RedirectCall(0x4E63B9, 0x60E290, &KeepDeactivateDrain, "alt-tab drain (0x4E63B9)");
