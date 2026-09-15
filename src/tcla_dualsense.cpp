@@ -37,7 +37,7 @@ namespace bit {   // action bits, from the keyboard bindings table in 0x5E9350
     const int FlagConfirm = 0x100, FlagBack = 0x220, FlagPause = 0x10, FlagMap = 0x20;
 }
 
-enum State { Menu = 0, Ped = 1, Gun = 2, Combat = 3, Stealth = 4, Driver = 5 };
+enum State { Menu = 0, Ped = 1, Gun = 2, Combat = 3, Stealth = 4, Driver = 5, EnterVehicle = 6 };   // 6: seen between on-foot and driving
 
 struct Config {
     int stickDeadzone = 12;      // percent, applied before writing (the game adds its own)
@@ -263,6 +263,7 @@ static void MergePad() {
     g_prevStart = p.start; g_prevBack = p.b; g_prevA = p.a;
 
     ExtrasUpdate(state, p.source && p.source[0] == 'D');   // DualSense only: rumble, lightbar, trigger effects
+    ExtrasReport();
 
     if (cfg.debugLog && GetTickCount64() >= g_nextDebug) {
         g_nextDebug = GetTickCount64() + 500;
@@ -318,9 +319,18 @@ static const char* PadLabelForBinding(int b) {
     }
 }
 
+static unsigned long long g_promptLogged = 0;   // bit per binding index already logged
 static const char* __cdecl PromptName(int dik, int actionIndex) {
     if (cfg.buttonPrompts) {
-        if (const char* s = PadLabelForBinding(actionIndex + 8)) return s;
+        if (const char* s = PadLabelForBinding(actionIndex + 8)) {
+            int b = actionIndex + 8;
+            if (cfg.debugLog && b >= 0 && b < 64 && !(g_promptLogged & (1ull << b))) {
+                g_promptLogged |= 1ull << b;
+                Log("prompt placeholder %%%c (binding %d, key 0x%02X) -> icon bytes %02X%s", 'a' + actionIndex, b, dik,
+                    (unsigned char)s[0], s[1] ? "+" : "");
+            }
+            return s;
+        }
     }
     return ((const char* (__cdecl*)(int))0x61E5C0)(dik);
 }
@@ -343,7 +353,7 @@ static int g_loggedFonts = 0;
 static void __cdecl LogPromptFont(DWORD element, const char* src) {
     if (!cfg.debugLog || g_loggedFonts > 20 || !element || !src) return;
     bool hasIcon = false;
-    for (const unsigned char* s = (const unsigned char*)src; *s; ++s) if (*s == '%' || (*s >= 0x80 && *s <= 0xA7)) { hasIcon = true; break; }
+    for (const unsigned char* s = (const unsigned char*)src; *s; ++s) if (s[0] == '%' && s[1] >= 'Y' && s[1] <= 'z') { hasIcon = true; break; }
     if (!hasIcon) return;
     DWORD font = *(DWORD*)(element + 0x78);
     BYTE* fnt = font ? *(BYTE**)(font + 0x28) : nullptr;

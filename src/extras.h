@@ -19,9 +19,29 @@ static ULONGLONG g_nextOutputRefresh = 0;
 static int g_gameMotorA = 0, g_gameMotorB = 0;
 static bool g_loggedWrite = false;
 
+static int g_vibCalls = 0, g_vibNonZero = 0, g_vibMaxA = 0, g_vibMaxB = 0;
+static int g_outWrites = 0, g_outErrors = 0, g_outTriggerOn = 0;
+static ULONGLONG g_nextExtrasReport = 0;
+
 static void __stdcall OnGameVibrate(int motorA, int motorB) {   // replaces 0x5FE480 (ret 8)
     g_gameMotorA = motorA < 0 ? 0 : (motorA > 255 ? 255 : motorA);
     g_gameMotorB = motorB < 0 ? 0 : (motorB > 255 ? 255 : motorB);
+    ++g_vibCalls;
+    if (g_gameMotorA || g_gameMotorB) {
+        ++g_vibNonZero;
+        if (g_gameMotorA > g_vibMaxA) g_vibMaxA = g_gameMotorA;
+        if (g_gameMotorB > g_vibMaxB) g_vibMaxB = g_gameMotorB;
+    }
+}
+
+// Debug evidence: once per second when something happened, log what the game asked for and what was sent.
+static void ExtrasReport() {
+    if (!cfg.debugLog || GetTickCount64() < g_nextExtrasReport) return;
+    g_nextExtrasReport = GetTickCount64() + 1000;
+    if (!g_vibNonZero && !g_outErrors && !g_outTriggerOn) { g_vibCalls = 0; g_outWrites = 0; return; }
+    Log("extras: game vibration calls=%d nonzero=%d max=(%d,%d) | output writes=%d errors=%d (last %lu) | R2 effect frames=%d",
+        g_vibCalls, g_vibNonZero, g_vibMaxA, g_vibMaxB, g_outWrites, g_outErrors, g_ds.LastWriteError(), g_outTriggerOn);
+    g_vibCalls = g_vibNonZero = g_vibMaxA = g_vibMaxB = g_outWrites = g_outErrors = g_outTriggerOn = 0;
 }
 
 static void ExtrasLoadConfig(const char* iniPath) {
@@ -66,10 +86,12 @@ static void ExtrasUpdate(int state, bool padActive) {
     if (xcfg.triggerEffects && (state == 2 /*Gun*/ || state == 5 /*Driver: R2 fires*/ || state == 4 /*Stealth: tranquiliser*/))
         SetTriggerSection(o.rightTrigger, 0x50, 0xA0, 0xB0);
     g_out = o;
+    if (o.rightTrigger[0]) ++g_outTriggerOn;
 
     // Send on change, and refresh every 2 s in case the controller dropped the state (e.g. reconnect).
     if (g_out != g_sentOut || GetTickCount64() >= g_nextOutputRefresh) {
         if (g_ds.Send(g_out)) {
+            ++g_outWrites;
             g_sentOut = g_out;
             g_nextOutputRefresh = GetTickCount64() + 2000;
             if (!g_loggedWrite) {
