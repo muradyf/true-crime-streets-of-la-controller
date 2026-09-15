@@ -203,6 +203,28 @@ static void MenuArtFixInstall() {
         ++bgSites;
     }
     Log("shell background 4:3 fix installed (%d of 2 sites)", bgSites);
+
+    // City map (UI_Map.xpr, [0x6D95E8]): the renders at 0x4D5BAD and 0x4D8460 size and centre the map with
+    // sx = W/640, sy = H/480 (call 0x6089F0 = GetScreenW; mulss [0x679944] = 1/640), so it stretches on wide screens.
+    // Using H/480 for sx too keeps the map's aspect; its X centring already uses (W - texW*sx)/2.
+    int mapSites = 0;
+    for (DWORD site : { 0x4D5BCEul, 0x4D8495ul }) {
+        BYTE* p = (BYTE*)site;
+        const BYTE mulss[] = { 0xF3, 0x0F, 0x2A, 0xC0, 0xF3, 0x0F, 0x59, 0x05 };   // cvtsi2ss xmm0,eax; mulss xmm0,[disp]
+        if (p[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(p + 1)) != 0x6089F0 || memcmp(p + 5, mulss, sizeof(mulss)) ||
+            *(DWORD*)(p + 13) != 0x679944) {
+            Log("city map scale site 0x%08lX differs, not patched", site);
+            continue;
+        }
+        DWORD old;
+        VirtualProtect(p, 17, PAGE_EXECUTE_READWRITE, &old);
+        *(int*)(p + 1) = (int)(0x608A00 - (site + 5));      // GetScreenH
+        *(DWORD*)(p + 13) = 0x6786A8;                        // 1/480
+        VirtualProtect(p, 17, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), p, 17);
+        ++mapSites;
+    }
+    Log("city map aspect fix installed (%d of 2 sites)", mapSites);
 }
 
 static void __cdecl AdjustMovieRect(float* a) {             // a = x0, y0, x1, y1

@@ -24,7 +24,7 @@ fully analog.
 | Menus, HUD and text scaled for high resolutions; full-screen layouts centred in 4:3 | tested (2560×1600 menus) |
 | In-game HUD (portrait, street sign, radar, meters) and the episode-select map scaled with the screen height | tested (2560×1600) |
 | Separate menu and HUD size settings (`MenuScale`, `HUDScale`, percent of filling the screen height; defaults 90 / 75) | tested (2560×1600: 3.0× / 2.5×) |
-| Movies, the startup loading screen and the menu background drawn at 4:3 with black bars instead of stretched; menu items kept inside the 4:3 frame | tested (2560×1600, compared with a 1024×768 PC screenshot) |
+| Movies, the startup loading screen and the menu background drawn at 4:3 with black bars instead of stretched; menu items kept inside the 4:3 frame; city map keeps its proportions | tested (2560×1600, compared with 1024×768 PC screenshots) |
 | First menu sound follows the SFX volume (it was hard-coded above maximum) | tested (memory read) |
 
 ## Requirements
@@ -134,6 +134,7 @@ controller and input values to `scripts\TrueCrimeDualSense.log` when reporting a
 | `0x68207C` → `0x568390` | Episode-select screen render (vtable slot). Its map icons and bullet/trail images have scaled positions but raw sizes; wrapped in the same virtual pass. |
 | `0x60E88B`, `0x4E7CBE`, `0x4E7D43`, `0x610AC9`, `0x6113C5` | Full-screen quads at `0,0,W,H`: the Bink movie frame and `Title.xpr` (the loading screen after the intro movies). Narrowed to 4:3 after clearing the screen to black. |
 | `0x55DEBA` / `0x55DFAC` | Shell background (`ShellBG.xpr`) drawn through `0x4CB1A0` with a `W+1 × H+1` rect; narrowed to the centred 4:3 box, side bars cleared to black. |
+| `0x4D5BCE` / `0x4D8495` | City map (`UI_Map.xpr`) renders size the map and its markers with `W/640` horizontally and `H/480` vertically, stretching it on wide screens. Both scales now use `H/480`; the existing `(W − width)/2` centring does the rest. |
 | `0x5F2C10` / `0x66191C` | Starting a voice Plays its DirectSound buffer before the category volume is applied (`0x5F2800`), so the first use of each sound (e.g. the first menu enter/back transition) played at full volume. The voice's category volume is now set on the buffer just before `Play`. |
 | `0x4E71E8` | Sound init sets the menu category (`0x20`) to 0.65 before the ini volumes are applied; the SFX slider maps 0–10 to 0–0.585. The volumes are now applied right after it. |
 
