@@ -25,6 +25,8 @@ fully analog.
 | In-game HUD (portrait, street sign, radar, meters) and the episode-select map scaled with the screen height | tested (2560×1600) |
 | Separate menu and HUD size settings (`MenuScale`, `HUDScale`, percent of filling the screen height; defaults 90 / 75) | tested (2560×1600: 3.0× / 2.5×) |
 | Movies, the startup loading screen and the menu background drawn at 4:3 with black bars instead of stretched; menu items kept inside the 4:3 frame; city map keeps its proportions | tested (2560×1600, compared with 1024×768 PC screenshots) |
+| City map markers (player, destinations) placed correctly on the centred map | tested (2560×1600) |
+| City map like the PS2 version: black behind the map instead of the menu photo (`CityMapPS2Look`) | tested (2560×1600) |
 | First menu sound follows the SFX volume (it was hard-coded above maximum) | tested (memory read) |
 | Options → Display lists the monitor's resolutions (the game offered only five 4:3 sizes up to 1280×960); Apply saves the choice for the next start; MENU SIZE / HUD SIZE rows step the UI sizes live | tested (list, apply + restart at 1920×1080, menu size live) |
 
