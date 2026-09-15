@@ -341,31 +341,6 @@ static bool PatchCall(DWORD site, BYTE* expectedTarget4, void* newTarget, const 
     return true;
 }
 
-// Diagnostic: the UI text element at 0x5596FE draws with font [[edi+0x78]+0x28]; log which font (by cell height) renders
-// prompt text, so icon glyphs can be confirmed to exist in that font.
-static int g_loggedFonts = 0;
-static void __cdecl LogPromptFont(DWORD element, const char* src) {
-    if (!cfg.debugLog || g_loggedFonts > 20 || !element || !src) return;
-    bool hasIcon = false;
-    for (const unsigned char* s = (const unsigned char*)src; *s; ++s) if (s[0] == '%' && s[1] >= 'Y' && s[1] <= 'z') { hasIcon = true; break; }
-    if (!hasIcon) return;
-    DWORD font = *(DWORD*)(element + 0x78);
-    BYTE* fnt = font ? *(BYTE**)(font + 0x28) : nullptr;
-    if (!fnt) return;
-    Log("prompt text font: first=0x%02X count=%u cellH=%u text=\"%.60s\"", fnt[0x15], fnt[0x14], fnt[0x16], src);
-    ++g_loggedFonts;
-}
-__declspec(naked) static void TextBuildWithFontLog() {
-    __asm {
-        push dword ptr [esp + 8]    // src (arg 2 of 0x557BC0)
-        push edi                    // UI text element
-        call LogPromptFont
-        add esp, 8
-        mov eax, 0x557BC0
-        jmp eax
-    }
-}
-
 // ---------------------------------------------------------------- hook
 __declspec(naked) static void CallOriginalUpdate() {
     __asm {
@@ -452,9 +427,6 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         // call 0x61E5C0 at 0x557C0F (rel32 from 0x557C14 = 0x000C69AC)
         BYTE nameCall[4] = { 0xAC, 0x69, 0x0C, 0x00 };
         PatchCall(0x557C0F, nameCall, &PromptName, "button prompt names (0x557C0F)");
-        // call 0x557BC0 at 0x5596FE (rel32 from 0x559703 = 0xFFFFE4BD)
-        BYTE textCall[4] = { 0xBD, 0xE4, 0xFF, 0xFF };
-        if (cfg.debugLog) PatchCall(0x5596FE, textCall, &TextBuildWithFontLog, "prompt font diagnostic (0x5596FE)");
         if (xcfg.rumble) ExtrasInstallHooks();
         DeviceFixInstall();
         PauseSaveInstall();
