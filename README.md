@@ -119,6 +119,8 @@ controller and input values to `scripts\TrueCrimeDualSense.log` when reporting a
 | `0x5515A0` / `0x551570` | UI scale (`0x6AEA00/04`, set once to 1.0) and safe rect (`0x7280F0..FC`). Hooked: scale = height / 480, safe-rect margins scaled to match. |
 | `0x4CB74D` | Unanchored UI X (`xor ecx,ecx`); offset by `(width − height·4/3) / 2` so full-layout screens are centred. |
 | `0x4DD720` / `0x609FD0` | HUD render thunk and 2D batch flush. The HUD sizes are raw 640×480 pixels, so the HUD pass runs in a virtual 480-high space (scale 1.0, screen and safe rect divided by height/480) and its pre-transformed vertices are multiplied back at flush. |
+| `0x4CB7F0` | Layout rect builder for menu images, sprites and the logo: positions went through the anchors, but width was `w × [0x6A6FDC]` (1.0) and height raw. Width now uses the UI scale (`0x4CB812`) and height goes through a stub (`0x4CB7F9`). |
+| `0x55AEA0` | Shell streak lines: Y was `y × scale` with no layout offset, thickness and length raw. Stubs at `0x55B0DD` / `0x55B10D` and the displacement at `0x55B119` add the offset and scale both. |
 | `0x68207C` → `0x568390` | Episode-select screen render (vtable slot). Its map icons and bullet/trail images have scaled positions but raw sizes; wrapped in the same virtual pass. |
 | `0x60E88B` | Bink movie quad drawn at `0,0,W,H`; narrowed to 4:3 after clearing the screen to black. |
 | `0x4E71E8` | Sound init sets the menu category (`0x20`) to 0.65 before the ini volumes are applied; the SFX slider maps 0–10 to 0–0.585. The volumes are now applied right after it. |

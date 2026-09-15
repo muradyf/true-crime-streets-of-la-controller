@@ -83,6 +83,81 @@ __declspec(naked) static void UnanchoredYStub() {           // replaces 0x4CB7DD
     }
 }
 
+static bool WriteJmp(DWORD site, void* target, size_t len);
+
+// Menu art sizes. The layout rect builder 0x4CB7F0 (used by images, sprites and the logo) scales positions through
+// the anchor helpers but takes width as w*[0x6A6FDC] (always 1.0) and height raw. Width now uses [0x6AEA00]
+// (displacement at 0x4CB812) and height goes through a stub at 0x4CB7F9. HUD/episode-map passes run with scale 1.0,
+// so they are unchanged.
+__declspec(naked) static void RectHeightStub() {            // replaces 0x4CB7F9: mov ebx,[esi+0Ch]; push edi; mov edi,[esi+10h]
+    __asm {
+        cvtsi2ss xmm0, dword ptr [esi + 0x0C]
+        mulss xmm0, dword ptr ds:[0x6AEA04]
+        cvttss2si ebx, xmm0
+        push edi
+        mov edi, dword ptr [esi + 0x10]
+        push 0x4CB800
+        ret
+    }
+}
+
+// Shell streak lines (0x55AEA0, drawn by the shell manager 0x55D940): Y = y*[0x6AEA04] with no layout offset,
+// thickness [obj+34h]*32 raw, length t*1920*[0x6A6FDC] raw. Add the vertical layout offset and scale thickness and
+// length by the menu scale.
+__declspec(naked) static void StreakThicknessStub() {       // replaces 0x55B0DD: mulss xmm0,[0x67BE10]; cvttss2si esi,xmm0
+    __asm {
+        mulss xmm0, dword ptr ds:[0x67BE10]
+        mulss xmm0, dword ptr ds:[0x6AEA04]
+        cvttss2si esi, xmm0
+        push 0x55B0E9
+        ret
+    }
+}
+
+__declspec(naked) static void StreakYStub() {               // replaces 0x55B10D: cvttss2si esi,xmm0; cvtsi2ss xmm0,edx
+    __asm {
+        cvttss2si esi, xmm0
+        add esi, g_uiOffY
+        cvtsi2ss xmm0, edx
+        push 0x55B115
+        ret
+    }
+}
+
+static bool PatchBytes(DWORD site, const BYTE* bytes, size_t len) {
+    DWORD old;
+    if (!VirtualProtect((LPVOID)site, len, PAGE_EXECUTE_READWRITE, &old)) return false;
+    memcpy((void*)site, bytes, len);
+    VirtualProtect((LPVOID)site, len, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), (LPVOID)site, len);
+    return true;
+}
+
+static void MenuArtFixInstall() {
+    const BYTE rectH[]   = { 0x8B, 0x5E, 0x0C, 0x57, 0x8B, 0x7E, 0x10 };
+    const BYTE rectW[]   = { 0xF3, 0x0F, 0x59, 0x05, 0xDC, 0x6F, 0x6A, 0x00 };
+    const BYTE strkH[]   = { 0xF3, 0x0F, 0x59, 0x05, 0x10, 0xBE, 0x67, 0x00, 0xF3, 0x0F, 0x2C, 0xF0 };
+    const BYTE strkY[]   = { 0xF3, 0x0F, 0x2C, 0xF0, 0xF3, 0x0F, 0x2A, 0xC2 };
+    const BYTE strkW[]   = { 0xF3, 0x0F, 0x59, 0x05, 0xDC, 0x6F, 0x6A, 0x00 };
+    const BYTE scaleXDisp[] = { 0x00, 0xEA, 0x6A, 0x00 };  // [0x6AEA00]
+    if (memcmp((BYTE*)0x4CB7F9, rectH, sizeof(rectH)) || memcmp((BYTE*)0x4CB80E, rectW, sizeof(rectW))) {
+        Log("layout rect builder bytes differ, menu art size fix not installed");
+    } else {
+        WriteJmp(0x4CB7F9, &RectHeightStub, sizeof(rectH));
+        PatchBytes(0x4CB812, scaleXDisp, 4);
+        Log("menu art size fix installed (0x4CB7F9, 0x4CB812)");
+    }
+    if (memcmp((BYTE*)0x55B0DD, strkH, sizeof(strkH)) || memcmp((BYTE*)0x55B10D, strkY, sizeof(strkY)) ||
+        memcmp((BYTE*)0x55B115, strkW, sizeof(strkW))) {
+        Log("streak draw bytes differ, streak fix not installed");
+    } else {
+        WriteJmp(0x55B0DD, &StreakThicknessStub, sizeof(strkH));
+        WriteJmp(0x55B10D, &StreakYStub, sizeof(strkY));
+        PatchBytes(0x55B119, scaleXDisp, 4);
+        Log("streak line fix installed (0x55B0DD, 0x55B10D, 0x55B119)");
+    }
+}
+
 static void __cdecl AdjustMovieRect(float* a) {             // a = x0, y0, x1, y1
     float w = a[2] - a[0], h = a[3] - a[1];
     float target = h * 4.0f / 3.0f;
@@ -142,6 +217,7 @@ static void UiFixInstall() {
             WriteJmp(0x4CB74D, &UnanchoredXStub, 9);
             WriteJmp(0x4CB7DD, &UnanchoredYStub, 9);
             Log("UI scale fix installed (0x5515A0, 0x551570, 0x4CB74D, 0x4CB7DD)");
+            MenuArtFixInstall();
         }
     }
     if (g_movieFix) {
