@@ -398,7 +398,7 @@ __declspec(naked) static void TimedRestore5ED5A0() {         // call 0x5ED5A0 (t
 // D3D_OK skips the rebuild, anything else (a lost exclusive-fullscreen device) runs the original release and re-create
 // then, which is the same work in the same order, only later.
 static int g_keepDevice = 1;
-static bool g_releaseSkipped = false, g_keepOk = false, g_resetFailed = false;
+static bool g_releaseSkipped = false, g_keepOk = false;
 static HRESULT DeviceTcl() {
     void* dev = *(void**)0x72C014;
     if (!dev) return E_FAIL;
@@ -409,8 +409,16 @@ static void __cdecl KeepDeactivateDrain() {                  // call 0x60E290 at
     if (g_keepDevice && *(void**)0x72C014) return;
     ((void(__cdecl*)())0x60E290)();
 }
+// Only a windowed device survives the window going to the background; an exclusive-fullscreen one is always lost, so
+// keeping it buys nothing and deferring the release to the activate side crashed native d3d8. Exclusive devices
+// therefore take the unmodified path.
+static bool DeviceIsWindowed() {
+    DWORD renderer = *(DWORD*)0x72C024;
+    UINT* pp = renderer ? (UINT*)(renderer + 0x528) : nullptr;
+    return pp && pp[7] == 1;
+}
 static void __cdecl KeepDeactivateRelease() {                // call 0x6125C0 at 0x4E63BE and 0x61288D
-    if (g_keepDevice && *(void**)0x72C014) {
+    if (g_keepDevice && *(void**)0x72C014 && DeviceIsWindowed()) {
         if (!g_releaseSkipped) Log("alt-tab out: device and resources kept (TestCooperativeLevel 0x%08lX)", DeviceTcl());
         g_releaseSkipped = true;
         return;
@@ -437,14 +445,11 @@ static void __cdecl KeepActivateRecreate() {                 // call 0x6125F0 at
     if (g_releaseSkipped) {
         g_releaseSkipped = false;
         if (g_keepOk) return;
-        if (!g_resetFailed) {
-            ((void(__cdecl*)())0x6125F0)();                  // 0x61DBC0 resets the kept device
-            HRESULT tcl = DeviceTcl();
-            if (tcl == 0) { Log("alt-tab back: device reset with resources kept"); return; }
-            g_resetFailed = true;                            // don't pay for the attempt again (~120 ms)
-            Log("alt-tab back: reset did not take (TestCooperativeLevel 0x%08lX), releasing and re-creating; "
-                "later alt-tabs skip the reset attempt", tcl);
-        }
+        // No reset attempt: 0x61DBC0 would Reset the kept device, and that never succeeded (the game's vertex and
+        // index buffers are DYNAMIC|WRITEONLY in POOL_DEFAULT, which blocks a reset). Worse, on native d3d8 keeping
+        // the device and then falling back to release + CreateDevice crashed the process inside d3d8.dll with an
+        // access violation (2026-09-16, Windows 11 26100, d3d8.dll 10.0.26100.9278). So when the device did not
+        // survive, release and re-create exactly like the unmodified game.
         ReleaseTimed();
     }
     ((void(__cdecl*)())0x6125F0)();
