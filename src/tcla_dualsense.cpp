@@ -430,7 +430,7 @@ static void LoadConfig(HMODULE self) {
     if (dot) { strcpy_s(dot, path + MAX_PATH - dot, ".log"); g_log = _fsopen(path, "w", _SH_DENYNO); }   // readable while the game runs
 }
 
-BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID) {
+BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(mod);
         LoadConfig(mod);
@@ -449,6 +449,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID) {
         HudFixInstall();
         SoundFixInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
+        Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);
         ExtrasShutdown();
     }
     return TRUE;

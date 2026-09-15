@@ -93,14 +93,28 @@ __declspec(naked) static void AfterCreateDevice() {
 // a nested call is skipped (the outer one creates the device and restores resources).
 static int g_inRecreate = 0, g_nestedRecreates = 0;
 static void __cdecl LogNestedRecreate() { Log("device re-creation requested while one is in progress: skipped (%d)", ++g_nestedRecreates); }
+static void __cdecl LogRecreate(int after) {
+    Log("device re-create %s: device %p, loop state %d, window active %d", after ? "done" : "start",
+        *(void**)0x72C014, *(int*)0x6B99E0, (int)GameWindowHasFocus());
+}
 
 __declspec(naked) static void RecreateGuard() {             // replaces call 0x608D30 at 0x6125F0
     __asm {
         cmp g_inRecreate, 0
         jne nested
         mov g_inRecreate, 1
+        pushad
+        push 0
+        call LogRecreate
+        add esp, 4
+        popad
         mov eax, 0x608D30
         call eax
+        pushad
+        push 1
+        call LogRecreate
+        add esp, 4
+        popad
         mov g_inRecreate, 0
         mov eax, 0x6125F5
         jmp eax
