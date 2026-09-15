@@ -48,7 +48,31 @@ static void __cdecl DeviceRetryPause() {
 }
 
 static void __cdecl DeviceGiveUp() { Log("CreateDevice still failing after %d retries (hr 0x%08lX)", g_deviceRetries, g_deviceLastHr); }
-static void __cdecl DeviceRecovered() { if (g_deviceRetries) Log("graphics device created after %d retries", g_deviceRetries); }
+
+static int g_logCreateState = 0;   // set from D3DTrace
+static BOOL CALLBACK LogTopmostWindow(HWND h, LPARAM) {
+    DWORD pid = 0; GetWindowThreadProcessId(h, &pid);
+    if (pid == GetCurrentProcessId() || !IsWindowVisible(h) || !(GetWindowLongA(h, GWL_EXSTYLE) & WS_EX_TOPMOST)) return TRUE;
+    RECT r; GetWindowRect(h, &r);
+    if (r.right - r.left <= 0 || r.bottom - r.top <= 0) return TRUE;
+    char cls[64] = ""; GetClassNameA(h, cls, sizeof(cls));
+    Log("  topmost window: class %s pid %lu rect %ld,%ld-%ld,%ld", cls, pid, r.left, r.top, r.right, r.bottom);
+    return TRUE;
+}
+static void BorderlessOnDeviceCreated();   // borderless.h
+static void __cdecl DeviceRecovered() {
+    if (g_deviceRetries) Log("graphics device created after %d retries", g_deviceRetries);
+    BorderlessOnDeviceCreated();
+    if (!g_logCreateState) return;
+    void* dev = *(void**)0x72C014;   // not yet stored by the caller; read the renderer's slot instead
+    DWORD renderer = *(DWORD*)0x72C024;
+    if (renderer) dev = *(void**)(renderer + 0x560);
+    UINT* pp = renderer ? (UINT*)(renderer + 0x528) : nullptr;
+    HRESULT tcl = dev ? ((HRESULT(__stdcall*)(void*))(*(void***)dev)[3])(dev) : 0;
+    if (pp) Log("CreateDevice ok: TCL 0x%08lX | pp %ux%u fmt %u count %u ms %u swap %u hwnd %p windowed %u autoDS %u dsfmt %u flags 0x%X refresh %u interval 0x%X | foreground is game %d",
+        tcl, pp[0], pp[1], pp[2], pp[3], pp[4], pp[5], (void*)pp[6], pp[7], pp[8], pp[9], pp[10], pp[11], pp[12], (int)GameWindowHasFocus());
+    EnumWindows(&LogTopmostWindow, 0);
+}
 
 __declspec(naked) static void AfterCreateDevice() {
     __asm {

@@ -81,6 +81,8 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "hud_fix.h"
 #include "sound_fix.h"
 #include "shot.h"
+#include "d3dtrace.h"
+#include "borderless.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -389,6 +391,7 @@ static void __cdecl HookedInputUpdate() {
     CallOriginalUpdate();
     UiFixUpdate();
     ShotUpdate();
+    D3DTraceUpdate();
     MergePad();
 }
 
@@ -432,6 +435,10 @@ static void LoadConfig(HMODULE self) {
     g_hudScalePct = (int)GetPrivateProfileIntA("Controller", "HUDScale", 75, path);
     g_forceWindowed = (int)GetPrivateProfileIntA("Controller", "ForceWindowed", 0, path);
     g_soundTrace = (int)GetPrivateProfileIntA("Controller", "SoundTrace", 0, path);
+    g_d3dTrace = (int)GetPrivateProfileIntA("Controller", "D3DTrace", 0, path);
+    g_logCreateState = g_d3dTrace;
+    g_borderless = (int)GetPrivateProfileIntA("Controller", "BorderlessFullscreen", 1, path);
+    BorderlessDecide();
     if (g_menuScalePct < 10 || g_menuScalePct > 200) g_menuScalePct = 90;
     if (g_hudScalePct < 10 || g_hudScalePct > 200) g_hudScalePct = 75;
     g_soundFix = (int)GetPrivateProfileIntA("Controller", "MenuSoundVolumeFix", 1, path);
@@ -457,6 +464,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         UiFixInstall();
         HudFixInstall();
         ForceWindowedInstall();
+        BorderlessInstall();
         SoundFixInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);

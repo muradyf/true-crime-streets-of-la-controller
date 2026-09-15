@@ -9,7 +9,7 @@ if not defined VS (echo Visual Studio with C++ tools not found & exit /b 1)
 call "%VS%\VC\Auxiliary\Build\vcvarsamd64_x86.bat" >nul || exit /b 1
 cd /d "%~dp0"
 if not exist build mkdir build
-cl /nologo /O2 /EHsc /MT /W3 /LD /Fo:build\ src\tcla_dualsense.cpp /Fe:build\TrueCrimeDualSense.dll /link hid.lib setupapi.lib xinput.lib user32.lib || exit /b 1
+cl /nologo /O2 /EHsc /MT /W3 /LD /Fo:build\ src\tcla_dualsense.cpp /Fe:build\TrueCrimeDualSense.dll /link hid.lib setupapi.lib xinput.lib user32.lib gdi32.lib || exit /b 1
 copy /y build\TrueCrimeDualSense.dll build\TrueCrimeDualSense.asi >nul
 cl /nologo /O2 /EHsc /MT /W3 /Isrc /Fo:build\ tools\ds_test.cpp /Fe:build\ds_test.exe /link hid.lib setupapi.lib || exit /b 1
 echo.
