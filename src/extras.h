@@ -1,0 +1,93 @@
+// Rumble, lightbar and adaptive triggers for TrueCrimeDualSense.
+// Included from tcla_dualsense.cpp after g_ds, cfg, Log and State are defined.
+//
+// Rumble: the game's vibration manager (0x551350) calls 0x5FE480(motorA, motorB) on the input block with
+// 0..255 values, only when the Vibration option (0x7527AC) is on, and (0,0) when pausing/stopping.
+// On PC 0x5FE480 is just "ret 8"; it is replaced with a jump to OnGameVibrate.
+#pragma once
+
+struct ExtrasConfig {
+    int rumble = 1;              // forward the game's vibration to the DualSense motors
+    int rumbleStrength = 100;    // percent
+    int triggerEffects = 1;      // adaptive trigger resistance on R2 when a weapon is out
+    int lightbar = 1;
+    int lightR = 0, lightG = 40, lightB = 255;   // police blue
+} xcfg;
+
+static PadOutput g_out, g_sentOut;
+static ULONGLONG g_nextOutputRefresh = 0;
+static int g_gameMotorA = 0, g_gameMotorB = 0;
+static bool g_loggedWrite = false;
+
+static void __stdcall OnGameVibrate(int motorA, int motorB) {   // replaces 0x5FE480 (ret 8)
+    g_gameMotorA = motorA < 0 ? 0 : (motorA > 255 ? 255 : motorA);
+    g_gameMotorB = motorB < 0 ? 0 : (motorB > 255 ? 255 : motorB);
+}
+
+static void ExtrasLoadConfig(const char* iniPath) {
+    auto get = [&](const char* k, int def) { return (int)GetPrivateProfileIntA("Controller", k, def, iniPath); };
+    xcfg.rumble = get("Rumble", xcfg.rumble);
+    xcfg.rumbleStrength = get("RumbleStrength", xcfg.rumbleStrength);
+    xcfg.triggerEffects = get("TriggerEffects", xcfg.triggerEffects);
+    xcfg.lightbar = get("Lightbar", xcfg.lightbar);
+    xcfg.lightR = get("LightbarRed", xcfg.lightR);
+    xcfg.lightG = get("LightbarGreen", xcfg.lightG);
+    xcfg.lightB = get("LightbarBlue", xcfg.lightB);
+}
+
+static void ExtrasInstallHooks() {
+    BYTE* site = (BYTE*)0x5FE480;
+    const BYTE expected[] = { 0xC2, 0x08, 0x00, 0xCC, 0xCC };   // ret 8 ; int3 padding
+    if (memcmp(site, expected, sizeof(expected)) != 0) { Log("vibration stub bytes differ, rumble disabled"); xcfg.rumble = 0; return; }
+    DWORD old;
+    VirtualProtect(site, 5, PAGE_EXECUTE_READWRITE, &old);
+    site[0] = 0xE9;
+    *(int*)(site + 1) = (int)((BYTE*)&OnGameVibrate - (site + 5));
+    VirtualProtect(site, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), site, 5);
+    Log("vibration hook installed at 0x5FE480");
+}
+
+// Adaptive trigger "section" resistance (mode 0x02: start, end, force), as used by DualSense tools.
+static void SetTriggerSection(uint8_t* t, uint8_t start, uint8_t end, uint8_t force) {
+    memset(t, 0, 11);
+    t[0] = 0x02; t[1] = start; t[2] = end; t[3] = force;
+}
+
+static void ExtrasUpdate(int state, bool padActive) {
+    if (!g_ds.IsOpen() || !padActive) return;
+    PadOutput o;
+    if (xcfg.rumble) {
+        o.motorLeft = (uint8_t)(g_gameMotorA * xcfg.rumbleStrength / 100 > 255 ? 255 : g_gameMotorA * xcfg.rumbleStrength / 100);
+        o.motorRight = (uint8_t)(g_gameMotorB * xcfg.rumbleStrength / 100 > 255 ? 255 : g_gameMotorB * xcfg.rumbleStrength / 100);
+    }
+    if (xcfg.lightbar) { o.red = (uint8_t)xcfg.lightR; o.green = (uint8_t)xcfg.lightG; o.blue = (uint8_t)xcfg.lightB; }
+    o.playerLeds = 0x04;                                  // centre LED = player 1
+    if (xcfg.triggerEffects && (state == 2 /*Gun*/ || state == 5 /*Driver: R2 fires*/ || state == 4 /*Stealth: tranquiliser*/))
+        SetTriggerSection(o.rightTrigger, 0x50, 0xA0, 0xB0);
+    g_out = o;
+
+    // Send on change, and refresh every 2 s in case the controller dropped the state (e.g. reconnect).
+    if (g_out != g_sentOut || GetTickCount64() >= g_nextOutputRefresh) {
+        if (g_ds.Send(g_out)) {
+            g_sentOut = g_out;
+            g_nextOutputRefresh = GetTickCount64() + 2000;
+            if (!g_loggedWrite) {
+                // one-time check of the real result: wait for the first write to complete
+                DWORD err = g_ds.WaitWriteResult(200);
+                Log("output report %s (bluetooth %d, length %u, error %lu)", err ? "FAILED" : "accepted",
+                    g_ds.IsBluetooth(), g_ds.OutputLength(), err);
+                g_loggedWrite = true;
+            }
+        } else if (g_ds.LastWriteError() && !g_loggedWrite) {
+            Log("output report failed, error %lu", g_ds.LastWriteError());
+            g_loggedWrite = true;
+        }
+    }
+}
+
+static void ExtrasShutdown() {
+    if (!g_ds.IsOpen()) return;
+    PadOutput off;
+    g_ds.Send(off);
+}
