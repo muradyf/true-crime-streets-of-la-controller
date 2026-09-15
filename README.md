@@ -95,6 +95,12 @@ Layout follows the original Xbox manual: A→✕, B→○, X→□, Y→△, Whi
 Options pauses, the touchpad (or Create) opens the map, R3 centres the camera on foot and skips the radio song in cars.
 `TriggersDrive=1` switches cars to R2/L2 analog gas/brake.
 
+**Remapping:** Options → Controls → **Controller** (the former Mouse Controls page) shows the button for every action in
+each mode (on foot, fighting, guns, driving, stealth). D-pad / left stick move the blinking cursor, ✕ edits the selected
+cell (then press the new button; L3 + a face button or R2 makes a combo, Options cancels), △ restores the default
+layout, ○ goes back. Custom bindings are saved to `[ControllerMap]` in `TrueCrimeDualSense.ini`. Sticks, Options and
+the touchpad are not remappable.
+
 ## Configuration
 
 All settings are in `scripts\TrueCrimeDualSense.ini` (stick deadzone, camera inversion, driving layout, precision-aim
@@ -110,6 +116,7 @@ controller and input values to `scripts\TrueCrimeDualSense.log` when reporting a
 | `0x752818` | Keyboard bindings table (same order as `[Keyboard2]` in `TrueCrime.ini`), used to identify every action bit. |
 | `0x6D9578` | Player; `+09` control state (1 on foot, 2 shooting, 3 fighting, 4 stealth, 5 driving), `+D68 == 3` precision targeting. |
 | `0x61E6A0` | Controller identification by DirectInput product name (a whitelist of 2004 gamepads). The joystick is created and configured but only read in the button-rebinding screen. |
+| `0x682F38` (Mouse Controls screen) | Per-mode grid of action rows (masks at `+0x368`) backed by the `[Mouse2]` button masks. Repurposed as the controller remap screen: cell labels (`0x56EC10`), capture type 3 → 4 so the game stops polling the mouse (`0x56EDF9`), assignment (`0x56EE4A`), DEFAULT (jump table `0x580258`), update slot `0x682F54` for controller navigation, titles via string ids `0xD95`/`0xD8C`. |
 | `0x557BC0` / `0x557C0F` | Text placeholder expansion (`%b`, `%j`, ...). Redirected to return icon glyphs. |
 | `Font_UI_Small.fnt` | Only font with the Xbox button glyphs (`0x80–0x83`, `0xA2–0xA7`); redrawn as PlayStation symbols by `tools\patch_font.py`. |
 | `0x5FE480` | Vibration output, an empty `ret 8` on PC; called by the vibration manager (`0x551350`). |

@@ -84,6 +84,7 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "d3dtrace.h"
 #include "borderless.h"
 #include "controller_map.h"
+#include "remap_screen.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -141,6 +142,26 @@ static bool ReadXInput(Pad& p) {
     return false;
 }
 
+
+// Debug only (DebugLog=1, no real controller): scripts\TrueCrimeDualSense.pad lists held buttons by name
+// ("cross up l3 ..."), so controller-driven screens can be tested without pressing a controller.
+static char g_fakePadPath[MAX_PATH] = "";
+static bool ReadFakePad(Pad& p) {
+    if (!cfg.debugLog || !g_fakePadPath[0]) return false;
+    FILE* f = nullptr;
+    f = _fsopen(g_fakePadPath, "r", _SH_DENYNO);
+    if (!f) return false;
+    char buf[256] = ""; size_t n = fread(buf, 1, sizeof(buf) - 1, f); buf[n] = 0; fclose(f);
+    auto has = [&](const char* w) { return strstr(buf, w) != nullptr; };
+    p.a = has("cross"); p.b = has("circle"); p.x = has("square"); p.y = has("triangle");
+    p.l1 = has("l1"); p.r1 = has("r1"); p.l3 = has("l3"); p.r3 = has("r3");
+    p.l2 = has("l2") ? 1.0f : 0.0f; p.r2 = has("r2") ? 1.0f : 0.0f;
+    p.up = has("up"); p.down = has("down"); p.left = has("left"); p.right = has("right");
+    p.start = has("start");
+    p.source = "fake pad (debug file)";
+    return p.ok = true;
+}
+
 // ---------------------------------------------------------------- merge into the game's input block
 static int ToByteAxis(float v) { int i = (int)std::lround(v * 127.0f); return i < -127 ? -127 : (i > 127 ? 127 : i); }
 
@@ -153,7 +174,7 @@ static ULONGLONG g_nextDebug = 0;
 
 static void MergePad() {
     Pad p;
-    if (!ReadDualSense(p) && !ReadXInput(p)) {
+    if (!ReadDualSense(p) && !ReadXInput(p) && !ReadFakePad(p)) {
         if (g_lastSource) { Log("no controller"); g_lastSource = nullptr; }
         g_prevButtons = *(int*)(addr::InputBlock + 0x04);
         return;
@@ -163,6 +184,13 @@ static void MergePad() {
     ApplyStickDeadzone(p.rx, p.ry);
     const float trig = cfg.triggerThreshold / 100.0f;
     bool l2 = p.l2 > trig, r2 = p.r2 > trig;
+    g_navPad = p; g_navL2 = l2; g_navR2 = r2;
+    if (RemapCaptureUpdate(p, l2, r2)) { g_prevStart = p.start; g_prevBack = p.b; g_prevA = p.a; return; }   // remap screen owns the pad
+    if (RemapNavActive()) {                                  // remap screen: the mod navigates; only back reaches the game
+        if ((p.b && !g_prevBack) || (p.start && !g_prevStart)) ((int*)addr::InputBlock)[2] |= bit::FlagBack;
+        g_prevStart = p.start; g_prevBack = p.b; g_prevA = p.a;
+        return;
+    }
 
     int* blk = (int*)addr::InputBlock;
     DWORD player = *(DWORD*)addr::PlayerPtr;
@@ -348,6 +376,7 @@ static void __cdecl HookedInputUpdate() {
     CallOriginalUpdate();
     UiFixUpdate();
     ShotUpdate();
+    RemapTitlesUpdate();
     D3DTraceUpdate();
     MergePad();
 }
@@ -373,6 +402,7 @@ static void LoadConfig(HMODULE self) {
     char path[MAX_PATH]; GetModuleFileNameA(self, path, MAX_PATH);
     char* dot = strrchr(path, '.'); if (dot) strcpy_s(dot, path + MAX_PATH - dot, ".ini");
     ShotInit(path);
+    strcpy_s(g_fakePadPath, path); { char* d2 = strrchr(g_fakePadPath, '.'); if (d2) strcpy_s(d2, g_fakePadPath + MAX_PATH - d2, ".pad"); }
     auto get = [&](const char* k, int def) { return (int)GetPrivateProfileIntA("Controller", k, def, path); };
     cfg.stickDeadzone = get("StickDeadzone", cfg.stickDeadzone);
     cfg.triggerThreshold = get("TriggerThreshold", cfg.triggerThreshold);
@@ -384,6 +414,7 @@ static void LoadConfig(HMODULE self) {
     cfg.buttonPrompts = get("ButtonPrompts", cfg.buttonPrompts);
     ExtrasLoadConfig(path);
     CtlLoadMap(path);
+    g_remapScreen = (int)GetPrivateProfileIntA("Controller", "ControllerRemapScreen", 1, path);
     g_deviceFix = (int)GetPrivateProfileIntA("Controller", "GraphicsCrashFix", 1, path);
     g_pauseSave = (int)GetPrivateProfileIntA("Controller", "PauseMenuSave", 1, path);
     g_uiFix = (int)GetPrivateProfileIntA("Controller", "UIScaleFix", 1, path);
@@ -423,6 +454,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         HudFixInstall();
         ForceWindowedInstall();
         BorderlessInstall();
+        RemapScreenInstall();
         SoundFixInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);
