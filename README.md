@@ -125,6 +125,7 @@ controller and input values to `scripts\TrueCrimeDualSense.log` when reporting a
 | `0x55AEA0` | Shell streak lines: Y was `y × scale` with no layout offset, thickness and length raw. Stubs at `0x55B0DD` / `0x55B10D` and the displacement at `0x55B119` add the offset and scale both. |
 | `0x68207C` → `0x568390` | Episode-select screen render (vtable slot). Its map icons and bullet/trail images have scaled positions but raw sizes; wrapped in the same virtual pass. |
 | `0x60E88B` | Bink movie quad drawn at `0,0,W,H`; narrowed to 4:3 after clearing the screen to black. |
+| `0x5F2C10` / `0x66191C` | Starting a voice Plays its DirectSound buffer before the category volume is applied (`0x5F2800`), so the first use of each sound (e.g. the first menu enter/back transition) played at full volume. The voice's category volume is now set on the buffer just before `Play`. |
 | `0x4E71E8` | Sound init sets the menu category (`0x20`) to 0.65 before the ini volumes are applied; the SFX slider maps 0–10 to 0–0.585. The volumes are now applied right after it. |
 
 DualSense report formats follow the Linux `hid-playstation` driver (Bluetooth output reports need a CRC32 with seed
