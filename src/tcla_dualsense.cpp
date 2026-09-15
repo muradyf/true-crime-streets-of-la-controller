@@ -88,7 +88,6 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "controller_map.h"
 #include "remap_screen.h"
 #include "display_fix.h"
-#include "citymap_look.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -408,6 +407,7 @@ static void LoadConfig(HMODULE self) {
     g_forceWindowed = (int)GetPrivateProfileIntA("Controller", "ForceWindowed", 0, path);
     g_soundTrace = (int)GetPrivateProfileIntA("Controller", "SoundTrace", 0, path);
     g_d3dTrace = (int)GetPrivateProfileIntA("Controller", "D3DTrace", 0, path);
+    g_shaderTrace = (int)GetPrivateProfileIntA("Controller", "ShaderTrace", 0, path);
     g_logCreateState = g_d3dTrace;
     g_deviceProfile = (int)GetPrivateProfileIntA("Controller", "DeviceProfile", 0, path);
     g_borderless = (int)GetPrivateProfileIntA("Controller", "BorderlessFullscreen", 1, path);
@@ -416,7 +416,6 @@ static void LoadConfig(HMODULE self) {
     if (g_hudScalePct < 10 || g_hudScalePct > 200) g_hudScalePct = 75;
     g_soundFix = (int)GetPrivateProfileIntA("Controller", "MenuSoundVolumeFix", 1, path);
     DisplayFixLoadConfig(path);
-    g_cityMapPs2 = (int)GetPrivateProfileIntA("Controller", "CityMapPS2Look", 1, path);
     cfg.debugLog = get("DebugLog", cfg.debugLog);
     if (dot) { strcpy_s(dot, path + MAX_PATH - dot, ".log"); g_log = _fsopen(path, "w", _SH_DENYNO); }   // readable while the game runs
 }
@@ -440,6 +439,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         RemapScreenInstall();
         SoundFixInstall();
         DisplayFixInstall();
+        ShaderTraceInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);
         ExtrasShutdown();
