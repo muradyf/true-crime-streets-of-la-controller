@@ -126,8 +126,28 @@ __declspec(naked) static void RecreateGuard() {             // replaces call 0x6
     }
 }
 
+// Crash at TrueCrime.exe+0x14EFAD (also without mods) at resolutions other than the desktop's: 0x54E850 fills a
+// locked vertex buffer (0x608710 create, 0x6082B0 lock) with movaps, which requires 16-byte alignment. The lock
+// pointer is only 8-byte aligned in some allocations (e.g. 0x04208068), so the write faults (reported as a read of
+// 0xFFFFFFFF). The four writes become movups (0F 29 -> 0F 11); same operands, no alignment requirement.
+static void VertexAlignFixInstall() {
+    const DWORD sites[] = { 0x54EFAD, 0x54EFB5, 0x54EFBD, 0x54EFD1 };
+    const BYTE expected[][3] = { { 0x0F, 0x29, 0x02 }, { 0x0F, 0x29, 0x0A }, { 0x0F, 0x29, 0x12 }, { 0x0F, 0x29, 0x12 } };
+    for (int i = 0; i < 4; ++i)
+        if (memcmp((BYTE*)sites[i], expected[i], 3)) { Log("vertex write bytes differ at 0x%lX, alignment fix not installed", sites[i]); return; }
+    for (DWORD site : sites) {
+        DWORD old;
+        VirtualProtect((LPVOID)(site + 1), 1, PAGE_EXECUTE_READWRITE, &old);
+        *(BYTE*)(site + 1) = 0x11;
+        VirtualProtect((LPVOID)(site + 1), 1, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), (LPVOID)site, 3);
+    }
+    Log("vertex buffer alignment crash fix installed (0x54EFAD..0x54EFD1)");
+}
+
 static void DeviceFixInstall() {
     if (!g_deviceFix) { Log("graphics device crash fix disabled in ini"); return; }
+    VertexAlignFixInstall();
     {
         BYTE* g = (BYTE*)0x6125F0;
         const BYTE callCreate[] = { 0xE8, 0x3B, 0x67, 0xFF, 0xFF };                // call 0x608D30
