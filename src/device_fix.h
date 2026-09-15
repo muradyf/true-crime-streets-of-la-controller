@@ -9,6 +9,7 @@
 // pumping window messages, and re-runs the game's own creation path (including the widescreen hook) from 0x61DBE2.
 // After ~10 s it returns no device, which the caller at 0x608D3B already handles.
 #pragma once
+#include <timeapi.h>
 
 static int g_deviceFix = 1;
 static int g_deviceRetries = 0;
@@ -198,12 +199,11 @@ static void __cdecl RestorePoll() {
     InterlockedIncrement(&g_pollTotalCalls);
     LARGE_INTEGER now; QueryPerformanceCounter(&now);
     if (!g_pollFreq.QuadPart) QueryPerformanceFrequency(&g_pollFreq);
+    // Sleep(1) with 1 ms timer resolution, not a yield loop: the poll takes the same critical section (0x60DFE0) that
+    // the reading thread needs to update the slot, so spinning here starved the reader and the restore phase stayed at
+    // ~690 ms however fast this side polled.
     if (!g_restorePollFix) Sleep(5);
-    else {
-        if ((now.QuadPart - g_pollLast.QuadPart) * 1000 > g_pollFreq.QuadPart * 20) g_pollWaitStart = now;   // a new wait
-        if ((now.QuadPart - g_pollWaitStart.QuadPart) * 1000 < g_pollFreq.QuadPart * 2) { if (!SwitchToThread()) YieldProcessor(); }
-        else Sleep(1);
-    }
+    else Sleep(1);
     QueryPerformanceCounter(&g_pollLast);
     g_pollTotalQpc += g_pollLast.QuadPart - now.QuadPart;
 }
@@ -244,6 +244,7 @@ static void __cdecl WorkerIdle() {
 }
 
 static void RestorePollInstall() {
+    if (g_restorePollFix) timeBeginPeriod(1);       // otherwise Sleep(1) is a 15.6 ms scheduler tick
     {
         BYTE* w = (BYTE*)0x60DE4C;
         const BYTE orig[] = { 0x6A, 0x0A, 0xFF, 0x15, 0x54, 0x60, 0x67, 0x00, 0xE9 };   // push 10; call [Sleep]; jmp 0x60DD00
@@ -390,7 +391,7 @@ __declspec(naked) static void TimedRestore5ED5A0() {         // call 0x5ED5A0 (t
 // D3D_OK skips the rebuild, anything else (a lost exclusive-fullscreen device) runs the original release and re-create
 // then, which is the same work in the same order, only later.
 static int g_keepDevice = 1;
-static bool g_releaseSkipped = false, g_keepOk = false;
+static bool g_releaseSkipped = false, g_keepOk = false, g_resetFailed = false;
 static HRESULT DeviceTcl() {
     void* dev = *(void**)0x72C014;
     if (!dev) return E_FAIL;
@@ -420,10 +421,23 @@ static void __cdecl KeepActivateDrain() {                    // call 0x60E290 at
     KeepDecide();
     if (!g_keepOk) ((void(__cdecl*)())0x60E290)();
 }
+// When the device is only D3DERR_DEVICENOTRESET it can be Reset, and 0x61DBC0 already does that when the device
+// pointer is still there. Because the resources were never released, their live flag (bit 1 at +4) is still set, so
+// the restore pass (0x610070) skips them all and nothing is reloaded from disk - which is the 4.2 s in gameplay.
+// If the Reset does not take (for example a resource in the default pool blocks it), the original release and
+// re-create run as before.
 static void __cdecl KeepActivateRecreate() {                 // call 0x6125F0 at 0x4E63D9
     if (g_releaseSkipped) {
         g_releaseSkipped = false;
         if (g_keepOk) return;
+        if (!g_resetFailed) {
+            ((void(__cdecl*)())0x6125F0)();                  // 0x61DBC0 resets the kept device
+            HRESULT tcl = DeviceTcl();
+            if (tcl == 0) { Log("alt-tab back: device reset with resources kept"); return; }
+            g_resetFailed = true;                            // don't pay for the attempt again (~120 ms)
+            Log("alt-tab back: reset did not take (TestCooperativeLevel 0x%08lX), releasing and re-creating; "
+                "later alt-tabs skip the reset attempt", tcl);
+        }
         ReleaseTimed();
     }
     ((void(__cdecl*)())0x6125F0)();
