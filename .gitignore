@@ -1,0 +1,15 @@
+build/
+*.obj
+*.dll
+*.asi
+*.exe
+*.exp
+*.lib
+*.pdb
+*.log
+__pycache__/
+.vs/
+
+# Never commit game files (copyrighted): the tools patch the player's own copy
+*.fnt
+TCPC*.txt
