@@ -89,6 +89,7 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "controller_map.h"
 #include "remap_screen.h"
 #include "display_fix.h"
+#include "controls_menu.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -363,6 +364,7 @@ static void __cdecl HookedInputUpdate() {
     ShotUpdate();
     RemapTitlesUpdate();
     DisplayFixUpdate();
+    UpdateControlsLabels();
     D3DTraceUpdate();
     DeviceFirstFrameCheck();
     FrameGapCheck();
@@ -400,6 +402,7 @@ static void LoadConfig(HMODULE self) {
     cfg.invertCameraY = get("InvertCameraY", cfg.invertCameraY);
     cfg.invertThrottle = get("InvertThrottle", cfg.invertThrottle);
     cfg.triggersDrive = get("TriggersDrive", cfg.triggersDrive);
+    g_controlsRows = (int)GetPrivateProfileIntA("Controller", "ControlsMenuRows", 1, path);
     cfg.cameraSpeed = get("CameraSpeed", cfg.cameraSpeed);
     if (cfg.cameraSpeed < 10) cfg.cameraSpeed = 10;
     if (cfg.cameraSpeed > 200) cfg.cameraSpeed = 200;
@@ -450,6 +453,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         RemapScreenInstall();
         SoundFixInstall();
         DisplayFixInstall();
+        ControlsMenuInstall();
         ShaderTraceInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);
