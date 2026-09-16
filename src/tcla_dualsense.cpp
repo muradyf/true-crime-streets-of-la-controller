@@ -47,6 +47,7 @@ struct Config {
     int invertCameraY = 0;
     int invertThrottle = 0;
     int triggersDrive = 0;       // 0 = Xbox layout (right stick accelerate/brake); 1 = R2/L2 analog, fire R1, exit L1
+    int cameraSpeed = 100;       // percent of the right stick's full camera speed (lower = slower look/turn)
     int aimSpeed = 1024;         // precision-aim speed at full stick; the game turns value/1024 degrees per frame (0x519647)
     int buttonPrompts = 1;       // show DualSense button icons in tutorial/help text instead of PC key names
     int debugLog = 0;
@@ -208,7 +209,10 @@ static void MergePad() {
     int bits = 0, flags = 0;
     int moveX = ToByteAxis(p.lx), moveY = ToByteAxis(p.ly);
     // The game's own mouse path (0x5E987D) stores camera X as -mouseX and camera Y (+0x14) so that up is positive.
-    int camX = ToByteAxis(cfg.invertCameraX ? p.rx : -p.rx), camY = ToByteAxis(cfg.invertCameraY ? p.ry : -p.ry);
+    // CameraSpeed scales the stick before it is written, so the game's own turn rate is unchanged at 100.
+    float camScale = cfg.cameraSpeed / 100.0f;
+    int camX = ToByteAxis((cfg.invertCameraX ? p.rx : -p.rx) * camScale),
+        camY = ToByteAxis((cfg.invertCameraY ? p.ry : -p.ry) * camScale);
 
     // system buttons (all states)
     // Options mirrors the ESC key in every state: pressed sets the back flag, released sets the pause flag. The state
@@ -396,6 +400,9 @@ static void LoadConfig(HMODULE self) {
     cfg.invertCameraY = get("InvertCameraY", cfg.invertCameraY);
     cfg.invertThrottle = get("InvertThrottle", cfg.invertThrottle);
     cfg.triggersDrive = get("TriggersDrive", cfg.triggersDrive);
+    cfg.cameraSpeed = get("CameraSpeed", cfg.cameraSpeed);
+    if (cfg.cameraSpeed < 10) cfg.cameraSpeed = 10;
+    if (cfg.cameraSpeed > 200) cfg.cameraSpeed = 200;
     cfg.aimSpeed = get("AimSpeed", cfg.aimSpeed);
     cfg.buttonPrompts = get("ButtonPrompts", cfg.buttonPrompts);
     ExtrasLoadConfig(path);
