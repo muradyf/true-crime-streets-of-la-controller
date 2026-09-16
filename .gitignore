@@ -13,3 +13,4 @@ __pycache__/
 # Never commit game files (copyrighted): the tools patch the player's own copy
 *.fnt
 TCPC*.txt
+dist/

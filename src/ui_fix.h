@@ -156,6 +156,23 @@ __declspec(naked) static void BackgroundRectStub() {        // replaces call 0x4
     }
 }
 
+// New-game name entry ("enter name"): the licence-plate field is placed at x = screen width / 2 - 90 in real pixels
+// (0x56405A), then the widget puts that through the unanchored anchor, which now scales and offsets it. At 3x the
+// plate landed off-screen, so the typed name was invisible. Convert the pixel position into layout units first.
+static int __cdecl NamePlateX() {
+    float s = *(float*)0x6AEA00;
+    if (s < 0.01f) s = 1.0f;
+    return (int)((ScreenW() / 2 - 90 - g_uiOffX) / s);
+}
+
+__declspec(naked) static void NamePlateXStub() {           // replaces 0x56405A: call GetScreenW; cdq; sub; sar; sub 5Ah
+    __asm {
+        call NamePlateX
+        push 0x564067
+        ret
+    }
+}
+
 // City map marker origin: x0 (int, screen px) / sx. Stack slots as at the replaced instruction.
 __declspec(naked) static void MapMarkerOriginStubA() {      // replaces 0x4D5ED0 in render 0x4D5BAD: x0 [esp+38h], sx [esp+34h]
     __asm {
@@ -244,6 +261,16 @@ static void MenuArtFixInstall() {
         ++mapSites;
     }
     Log("city map aspect fix installed (%d of 2 sites)", mapSites);
+
+    {
+        const BYTE plateOrig[] = { 0xE8, 0x91, 0x49, 0x0A, 0x00, 0x99, 0x2B, 0xC2, 0xD1, 0xF8, 0x83, 0xE8, 0x5A };
+        if (memcmp((BYTE*)0x56405A, plateOrig, sizeof(plateOrig))) {
+            Log("name entry plate bytes differ, name plate fix not installed");
+        } else {
+            WriteJmp(0x56405A, &NamePlateXStub, sizeof(plateOrig));
+            Log("name entry plate fix installed (0x56405A)");
+        }
+    }
 
     // Map markers (player, destinations) are placed at ((x0 + c + u) * sx, ...), where x0 is the map's left edge in
     // screen pixels. With sx = W/640 x0 was always 0, so the pixel/unit mix never showed; with the centred map it

@@ -211,8 +211,11 @@ static void MergePad() {
     int camX = ToByteAxis(cfg.invertCameraX ? p.rx : -p.rx), camY = ToByteAxis(cfg.invertCameraY ? p.ry : -p.ry);
 
     // system buttons (all states)
-    if (p.start && !g_prevStart) flags |= (state == Menu ? bit::FlagBack : 0);
-    if (!p.start && g_prevStart && state != Menu) flags |= bit::FlagPause;   // game pauses on ESC release
+    // Options mirrors the ESC key in every state: pressed sets the back flag, released sets the pause flag. The state
+    // check used to gate these, so in-engine cutscenes (which skip on the released bit, 0x4BFCEE tests 0x10) ignored
+    // the controller while ESC skipped them: during a cutscene the game is in menu control mode.
+    if (p.start && !g_prevStart) flags |= bit::FlagBack;
+    if (!p.start && g_prevStart) flags |= bit::FlagPause;
     if (p.back || p.map) flags |= bit::FlagMap;
 
     if (state == Menu) {
