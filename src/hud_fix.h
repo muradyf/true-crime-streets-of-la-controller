@@ -24,11 +24,24 @@ struct VirtualUiState {
     int rect[4] = {};
 };
 
+// The 2D batches are shared, so a flush during the pass can carry vertices queued before it (the aim reticle is drawn
+// that way: parts of it landed in the batch before the HUD pass started and were scaled too, which moved its cross
+// off centre and left a stray line at one corner). The write pointers are noted when the pass begins, and only
+// vertices added after that are scaled.
+static DWORD* const kBatchObjects[] = { (DWORD*)0x6B9710, (DWORD*)0x7511E0 };
+static float* g_batchPassStart[2] = {};
+
+static void NoteBatchWritePointers() {
+    for (int i = 0; i < 2; ++i) g_batchPassStart[i] = (float*)kBatchObjects[i][0x14 / 4];
+}
+
 static void __cdecl ScaleHudBatch(DWORD* batch) {
     DWORD* vb = (DWORD*)batch[0x10 / 4];
     if (!vb) return;
     float* p = (float*)vb[0x28 / 4];
     float* end = (float*)batch[0x14 / 4];
+    for (int i = 0; i < 2; ++i)
+        if (batch == kBatchObjects[i] && g_batchPassStart[i] > p && g_batchPassStart[i] <= end) p = g_batchPassStart[i];
     if (!p || end <= p || (BYTE*)end - (BYTE*)p > 0x10000 * 0x24) return;
     float s = g_hudScale;
     for (; (BYTE*)p + 0x24 <= (BYTE*)end; p = (float*)((BYTE*)p + 0x24)) {
@@ -88,6 +101,7 @@ static void BeginVirtualUi(VirtualUiState& st, const char* name, float s, bool h
         g_uiOffY = (int)(st.offY / s + 0.5f);
     }
     g_hudScale = s;
+    NoteBatchWritePointers();
     g_inHud = 1;
 
     static unsigned loggedMask = 0;
