@@ -35,11 +35,42 @@ static void NoteBatchWritePointers() {
     for (int i = 0; i < 2; ++i) g_batchPassStart[i] = (float*)kBatchObjects[i][0x14 / 4];
 }
 
+// ReticleTrace=1 (debug): log the vertices whose colour matches the reticle setting, before they are scaled, so the
+// aim reticle's own geometry can be checked (the box, the cross and any stray segment) independently of the scaling.
+static int g_reticleTrace = 0;
+static int g_reticleLogged = 0;
+
+// Logs what a batch flushed during the pass actually contains: how many vertices, and the small clusters (a reticle
+// sized group) with their colours, so the aim reticle's geometry can be found without guessing its colour or the
+// vertex layout.
+static void TraceReticleVertices(float* p, float* end, DWORD stride) {
+    if (!g_reticleTrace || g_reticleLogged > 10) return;
+    int count = (int)(((BYTE*)end - (BYTE*)p) / stride);
+    if (count <= 0 || count > 20000) return;
+    // The reticle uses the colour from TrueCrime.ini (ReticleR/G/B), so match on colour wherever it is on screen.
+    DWORD want = (((DWORD)(*(int*)0x7527A0) & 0xFF) << 16) | (((DWORD)(*(int*)0x7527B4) & 0xFF) << 8) |
+                 ((DWORD)(*(int*)0x753068) & 0xFF);
+    char line[900] = "";
+    int hits = 0;
+    for (float* v = p; (BYTE*)v + stride <= (BYTE*)end; v = (float*)((BYTE*)v + stride)) {
+        if ((*(DWORD*)((BYTE*)v + 0x10) & 0x00FFFFFF) != want) continue;
+        char one[80];
+        _snprintf_s(one, sizeof(one), _TRUNCATE, "(%.1f,%.1f) ", v[0], v[1]);
+        if (strlen(line) + strlen(one) < sizeof(line) - 1) strcat_s(line, one);
+        if (++hits > 40) break;
+    }
+    if (!hits) return;
+    ++g_reticleLogged;
+    Log("reticle: %d vertices of %d, colour %06lX, scale %.3f, virtual screen %dx%d: %s",
+        hits, count, want, g_hudScale, ScreenW(), ScreenH(), line);
+}
+
 static void __cdecl ScaleHudBatch(DWORD* batch) {
     DWORD* vb = (DWORD*)batch[0x10 / 4];
     if (!vb) return;
     float* p = (float*)vb[0x28 / 4];
     float* end = (float*)batch[0x14 / 4];
+    if (p && end > p && (BYTE*)end - (BYTE*)p <= 0x10000 * 0x24) TraceReticleVertices(p, end, 0x24);
     for (int i = 0; i < 2; ++i)
         if (batch == kBatchObjects[i] && g_batchPassStart[i] > p && g_batchPassStart[i] <= end) p = g_batchPassStart[i];
     if (!p || end <= p || (BYTE*)end - (BYTE*)p > 0x10000 * 0x24) return;

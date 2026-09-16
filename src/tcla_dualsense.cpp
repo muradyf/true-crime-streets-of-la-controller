@@ -90,6 +90,8 @@ static ULONGLONG g_nextOpenTry = 0;
 #include "remap_screen.h"
 #include "display_fix.h"
 #include "controls_menu.h"
+#include "subtitle_trace.h"
+#include "subtitle_fix.h"
 
 static float Axis8(uint8_t v) { float f = (v - 128) / 127.0f; return f < -1 ? -1 : (f > 1 ? 1 : f); }
 
@@ -365,6 +367,7 @@ static void __cdecl HookedInputUpdate() {
     RemapTitlesUpdate();
     DisplayFixUpdate();
     UpdateControlsLabels();
+    SubtitleFixUpdate();
     D3DTraceUpdate();
     DeviceFirstFrameCheck();
     FrameGapCheck();
@@ -422,6 +425,9 @@ static void LoadConfig(HMODULE self) {
     g_soundTrace = (int)GetPrivateProfileIntA("Controller", "SoundTrace", 0, path);
     g_d3dTrace = (int)GetPrivateProfileIntA("Controller", "D3DTrace", 0, path);
     g_shaderTrace = (int)GetPrivateProfileIntA("Controller", "ShaderTrace", 0, path);
+    g_reticleTrace = (int)GetPrivateProfileIntA("Controller", "ReticleTrace", 0, path);
+    g_subtitleTrace = (int)GetPrivateProfileIntA("Controller", "SubtitleTrace", 0, path);
+    g_subtitleScalePct = (int)GetPrivateProfileIntA("Controller", "SubtitleScale", 0, path);
     g_logCreateState = g_d3dTrace;
     g_deviceProfile = (int)GetPrivateProfileIntA("Controller", "DeviceProfile", 0, path);
     g_borderless = (int)GetPrivateProfileIntA("Controller", "BorderlessFullscreen", 1, path);
@@ -454,6 +460,8 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         SoundFixInstall();
         DisplayFixInstall();
         ControlsMenuInstall();
+        SubtitleTraceInstall();
+        SubtitleFixInstall();
         ShaderTraceInstall();
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("process exiting (DLL detach, process terminating %d)", reserved != nullptr);
