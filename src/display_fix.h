@@ -202,11 +202,13 @@ __declspec(naked) static void DisplayOpenHook() {           // thiscall(screen, 
     }
 }
 
-// ---- MENU SIZE / HUD SIZE rows
+// ---- MENU SIZE / HUD SIZE / SUBTITLE SIZE rows
+// Subtitles get their own row because the size that suits a menu is not the size that suits a line of dialogue at
+// the bottom of the screen. Its first step is AUTO, which is SubtitleScale=0: follow the menu size, as before.
 static const int kSizeSteps[] = { 50, 60, 70, 75, 80, 90, 100 };
-static DWORD g_displayItems[9][5];
-static char g_menuSizeText[32] = "MENU SIZE", g_hudSizeText[32] = "HUD SIZE";
-static const DWORD kMenuSizeTextId = 0xD70, kHudSizeTextId = 0xD71;
+static DWORD g_displayItems[10][5];
+static char g_menuSizeText[32] = "MENU SIZE", g_hudSizeText[32] = "HUD SIZE", g_subSizeText[32] = "SUBTITLE SIZE";
+static const DWORD kMenuSizeTextId = 0xD70, kHudSizeTextId = 0xD71, kSubSizeTextId = 0xD72;
 
 static void FormatScale(char* out, size_t n, const char* label, int pct) {
     char v[16]; sprintf_s(v, "%.2f", FitScale(pct));
@@ -219,10 +221,13 @@ static void FormatScale(char* out, size_t n, const char* label, int pct) {
 static void UpdateSizeLabels() {
     FormatScale(g_menuSizeText, sizeof(g_menuSizeText), "MENU SIZE", g_menuScalePct);
     FormatScale(g_hudSizeText, sizeof(g_hudSizeText), "HUD SIZE", g_hudScalePct);
+    if (g_subtitleScalePct > 0) FormatScale(g_subSizeText, sizeof(g_subSizeText), "SUBTITLE SIZE", g_subtitleScalePct);
+    else sprintf_s(g_subSizeText, sizeof(g_subSizeText), "SUBTITLE SIZE AUTO");
     char** table = *(char***)0x72831C;
     if (!table) return;
     if (table[kMenuSizeTextId] != g_menuSizeText) table[kMenuSizeTextId] = g_menuSizeText;
     if (table[kHudSizeTextId] != g_hudSizeText) table[kHudSizeTextId] = g_hudSizeText;
+    if (table[kSubSizeTextId] != g_subSizeText) table[kSubSizeTextId] = g_subSizeText;
 }
 
 static int NextSizeStep(int pct) {
@@ -230,14 +235,19 @@ static int NextSizeStep(int pct) {
     return kSizeSteps[0];
 }
 
+static const char* const kSizeRowName[3] = { "menu size", "HUD size", "subtitle size" };
+static const char* const kSizeRowKey[3]  = { "MenuScale", "HUDScale", "SubtitleScale" };
+
 static char __fastcall SizeRowCallback(void*, void*, int which, int) {   // called like 0x557DC0 (thiscall, ret 8)
-    int& pct = which == 0 ? g_menuScalePct : g_hudScalePct;
-    pct = NextSizeStep(pct);
-    WriteIniInt("Controller", which == 0 ? "MenuScale" : "HUDScale", pct, g_modIniPath);
+    int& pct = which == 0 ? g_menuScalePct : which == 1 ? g_hudScalePct : g_subtitleScalePct;
+    // the subtitle row has one step the others do not: 0 = AUTO, back to following the menu size
+    pct = (which == 2 && pct >= kSizeSteps[_countof(kSizeSteps) - 1]) ? 0 : NextSizeStep(pct);
+    WriteIniInt("Controller", kSizeRowKey[which], pct, g_modIniPath);
     ApplyUiScale();
     UpdateSizeLabels();
     ((void(__cdecl*)(int, float, float))0x4CA4B0)(0xFF, 1.0f, 1.0f);   // menu confirm sound
-    Log("display: %s %d%% (%.3f at %dx%d)", which == 0 ? "menu size" : "HUD size", pct, FitScale(pct), ScreenW(), ScreenH());
+    Log("display: %s %d%% (%.3f at %dx%d)", kSizeRowName[which], pct,
+        FitScale(pct > 0 ? pct : g_menuScalePct), ScreenW(), ScreenH());
     return 1;
 }
 
@@ -315,6 +325,7 @@ static void DisplayFixInstall() {
     const DWORD cb = (DWORD)&SizeRowCallback;
     if (g_uiFix)  { const DWORD r[5] = { 1, kMenuSizeTextId, cb, 0, 0 }; memcpy(g_displayItems[count++], r, sizeof(r)); }
     if (g_hudFix) { const DWORD r[5] = { 1, kHudSizeTextId, cb, 1, 0 }; memcpy(g_displayItems[count++], r, sizeof(r)); }
+    if (g_uiFix)  { const DWORD r[5] = { 1, kSubSizeTextId, cb, 2, 0 }; memcpy(g_displayItems[count++], r, sizeof(r)); }
     DWORD old;
     VirtualProtect((LPVOID)0x6AF690, 8, PAGE_READWRITE, &old);
     *(DWORD*)0x6AF690 = (DWORD)&g_displayItems[0][0];

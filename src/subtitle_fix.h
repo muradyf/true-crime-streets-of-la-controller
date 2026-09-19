@@ -12,7 +12,6 @@
 // SubtitleScale: 0 = follow MenuScale, otherwise percent of filling the screen height (like MenuScale).
 #pragma once
 
-static int g_subtitleScalePct = 0;
 static float g_subScale = 1.0f;
 static float g_subWrapWidth = 512.0f;
 static float g_subWrittenScale = 0.0f;
