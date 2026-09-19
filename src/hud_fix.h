@@ -35,34 +35,63 @@ static void NoteBatchWritePointers() {
     for (int i = 0; i < 2; ++i) g_batchPassStart[i] = (float*)kBatchObjects[i][0x14 / 4];
 }
 
-// ReticleTrace=1 (debug): log the vertices whose colour matches the reticle setting, before they are scaled, so the
-// aim reticle's own geometry can be checked (the box, the cross and any stray segment) independently of the scaling.
+// ReticleTrace=1 (debug): log the vertices carrying the reticle's own colour before they are scaled, so its geometry
+// (the centre dot, the box, the cross) can be checked independently of the scaling. The colour is the one the game
+// packs at [0x6D54F4] from the three Options sliders and loads into every reticle primitive at 0x4DD346 - matching on
+// that is exact, where rebuilding it from the ini globals is not. Each line also says which batch carried the
+// vertices and where the pass's scaling window began, because the reticle is queued into the same shared batches as
+// the rest of the HUD and only what was added after the pass started is meant to be scaled.
 static int g_reticleTrace = 0;
 static int g_reticleLogged = 0;
 
-// Logs what a batch flushed during the pass actually contains: how many vertices, and the small clusters (a reticle
-// sized group) with their colours, so the aim reticle's geometry can be found without guessing its colour or the
-// vertex layout.
-static void TraceReticleVertices(float* p, float* end, DWORD stride) {
-    if (!g_reticleTrace || g_reticleLogged > 10) return;
+static void TraceReticleVertices(DWORD* batch, float* p, float* end, float* from, DWORD stride) {
+    if (!g_reticleTrace || g_reticleLogged > 40) return;
     int count = (int)(((BYTE*)end - (BYTE*)p) / stride);
     if (count <= 0 || count > 20000) return;
-    // The reticle uses the colour from TrueCrime.ini (ReticleR/G/B), so match on colour wherever it is on screen.
-    DWORD want = (((DWORD)(*(int*)0x7527A0) & 0xFF) << 16) | (((DWORD)(*(int*)0x7527B4) & 0xFF) << 8) |
-                 ((DWORD)(*(int*)0x753068) & 0xFF);
+    // [0x6D54F4] packs the three Options sliders in the order the screen stores them, which is red and blue the other
+    // way round from the D3DCOLOR the vertices carry (traced: global FF8000 against vertices 0080FF). Swap them back.
+    DWORD packed = *(DWORD*)0x6D54F4;
+    DWORD want = ((packed & 0xFF) << 16) | (packed & 0xFF00) | ((packed >> 16) & 0xFF);
+    // ReticleTrace=2: select by position instead of colour - the reticle is the only HUD element sitting on the exact
+    // centre of the screen, so everything within 30 units of it is its own geometry, whatever colour or vertex layout
+    // it uses. Both candidate colour offsets are dumped so the layout can be read off the data rather than assumed.
+    if (g_reticleTrace >= 2) {
+        float cx = ScreenW() * 0.5f, cy = ScreenH() * 0.5f;
+        if (count < 6) return;                              // 4-vertex quads are loading-screen glyphs, not the reticle
+        char raw[850] = "";
+        int hits = 0;
+        for (int i = 0; i < count; ++i) {
+            BYTE* v = (BYTE*)p + i * stride;
+            float x = ((float*)v)[0], y = ((float*)v)[1];
+            if (x < cx - 30.0f || x > cx + 30.0f || y < cy - 30.0f || y > cy + 30.0f) continue;
+            char one[110];
+            _snprintf_s(one, sizeof(one), _TRUNCATE, "#%d(%.1f,%.1f|%08lX,%08lX) ", i, x, y,
+                        *(DWORD*)(v + 0x10), *(DWORD*)(v + 0x14));
+            if (strlen(raw) + strlen(one) < sizeof(raw) - 1) strcat_s(raw, one);
+            if (++hits >= 30) break;
+        }
+        if (!hits) return;
+        ++g_reticleLogged;
+        Log("reticle raw: batch %08lX, %d vertices, scaled from #%d, %d near centre (%.1f,%.1f), want %06lX, "
+            "scale %.3f, virtual %dx%d: %s",
+            (DWORD)(DWORD_PTR)batch, count, (int)(((BYTE*)from - (BYTE*)p) / stride), hits, cx, cy, want,
+            g_hudScale, ScreenW(), ScreenH(), raw);
+        return;
+    }
     char line[900] = "";
-    int hits = 0;
-    for (float* v = p; (BYTE*)v + stride <= (BYTE*)end; v = (float*)((BYTE*)v + stride)) {
+    int hits = 0, idx = 0;
+    for (float* v = p; (BYTE*)v + stride <= (BYTE*)end; v = (float*)((BYTE*)v + stride), ++idx) {
         if ((*(DWORD*)((BYTE*)v + 0x10) & 0x00FFFFFF) != want) continue;
         char one[80];
-        _snprintf_s(one, sizeof(one), _TRUNCATE, "(%.1f,%.1f) ", v[0], v[1]);
+        _snprintf_s(one, sizeof(one), _TRUNCATE, "#%d(%.1f,%.1f) ", idx, v[0], v[1]);
         if (strlen(line) + strlen(one) < sizeof(line) - 1) strcat_s(line, one);
         if (++hits > 40) break;
     }
     if (!hits) return;
     ++g_reticleLogged;
-    Log("reticle: %d vertices of %d, colour %06lX, scale %.3f, virtual screen %dx%d: %s",
-        hits, count, want, g_hudScale, ScreenW(), ScreenH(), line);
+    int cut = (int)(((BYTE*)from - (BYTE*)p) / stride);
+    Log("reticle: batch %08lX, %d vertices, scaled from #%d, colour %06lX, scale %.3f, virtual %dx%d: %s",
+        (DWORD)(DWORD_PTR)batch, count, cut, want, g_hudScale, ScreenW(), ScreenH(), line);
 }
 
 static void __cdecl ScaleHudBatch(DWORD* batch) {
@@ -70,12 +99,13 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
     if (!vb) return;
     float* p = (float*)vb[0x28 / 4];
     float* end = (float*)batch[0x14 / 4];
-    if (p && end > p && (BYTE*)end - (BYTE*)p <= 0x10000 * 0x24) TraceReticleVertices(p, end, 0x24);
-    for (int i = 0; i < 2; ++i)
-        if (batch == kBatchObjects[i] && g_batchPassStart[i] > p && g_batchPassStart[i] <= end) p = g_batchPassStart[i];
     if (!p || end <= p || (BYTE*)end - (BYTE*)p > 0x10000 * 0x24) return;
+    float* from = p;
+    for (int i = 0; i < 2; ++i)
+        if (batch == kBatchObjects[i] && g_batchPassStart[i] > p && g_batchPassStart[i] <= end) from = g_batchPassStart[i];
+    TraceReticleVertices(batch, p, end, from, 0x24);
     float s = g_hudScale;
-    for (; (BYTE*)p + 0x24 <= (BYTE*)end; p = (float*)((BYTE*)p + 0x24)) {
+    for (p = from; (BYTE*)p + 0x24 <= (BYTE*)end; p = (float*)((BYTE*)p + 0x24)) {
         p[0] = (p[0] + 0.5f) * s - 0.5f;
         p[1] = (p[1] + 0.5f) * s - 0.5f;
     }
@@ -170,6 +200,45 @@ static void __fastcall EpisodeScreenRenderHook(void* self, void*, void* batch) {
     BeginVirtualUi(st, "episode map", UiScale(), false);
     render(self, nullptr, batch);
     EndVirtualUi(st);
+}
+
+// Aim reticle alignment (ReticleFix).
+//
+// Style 3 (the default) draws four primitives, all from GetScreenW/H halved: the box outline 0x60A830 and three
+// 0x60A6B0 rects - a vertical bar, a horizontal bar and a single pixel off the box's top-left corner. Traced at
+// 1280x800 virtual (ReticleTrace=1), their quads come out as:
+//     box        631.5..647.5 x 391.5..407.5   centre 639.5, 399.5
+//     vert bar   638.5..639.5 x 394.5..403.5   centre 639.0, 399.0
+//     horiz bar  634.5..643.5 x 398.5..399.5   centre 639.0, 399.0
+//     corner dot 630.5..631.5 x 390.5..391.5   one pixel diagonally outside the box corner
+// The box is an even 16 units across and the bars are an odd 1, so the game's integer maths cannot put them on the
+// same centre: the cross sits half a unit up and left of the box, and the corner dot sits just outside the corner.
+// At 640x480 that is half a pixel and one stray pixel, which nobody sees. The HUD pass magnifies the whole reticle,
+// so at 2560x1600 the half unit becomes a whole pixel of visible offset and the stray pixel becomes a 2x2 blob.
+//
+// Fix: make every part share the box's centre. The bars grow by one unit in each direction (thickness 1 -> 2, length
+// 9 -> 10), which is the only way an even-width box and a centred bar can agree, and the corner dot is given a zero
+// size so it draws nothing.
+static int g_reticleFix = 1;
+
+static void ReticleFixInstall() {
+    if (!g_reticleFix) return;
+    struct Site { DWORD addr; BYTE orig[3]; BYTE want; const char* what; };
+    const Site sites[] = {
+        { 0x4DD42C, { 0x8D, 0x50, 0x02 }, 0x00, "corner dot height" },
+        { 0x4DD43C, { 0x8D, 0x51, 0x02 }, 0x00, "corner dot width"  },
+        { 0x4DD498, { 0x8D, 0x50, 0x0A }, 0x0B, "vertical bar length" },
+        { 0x4DD4A9, { 0x8D, 0x51, 0x02 }, 0x03, "vertical bar thickness" },
+        { 0x4DD4F4, { 0x8D, 0x50, 0x02 }, 0x03, "horizontal bar thickness" },
+        { 0x4DD505, { 0x8D, 0x51, 0x0A }, 0x0B, "horizontal bar length" },
+    };
+    for (const Site& s : sites)
+        if (memcmp((BYTE*)s.addr, s.orig, sizeof(s.orig))) {
+            Log("reticle: %s site 0x%06lX differs, alignment fix not installed", s.what, s.addr);
+            return;
+        }
+    for (const Site& s : sites) PatchBytes(s.addr + 2, &s.want, 1);
+    Log("reticle alignment fix installed (bars centred on the box, corner dot removed)");
 }
 
 static void HudFixInstall() {
