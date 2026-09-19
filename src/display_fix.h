@@ -208,7 +208,7 @@ __declspec(naked) static void DisplayOpenHook() {           // thiscall(screen, 
 static const int kSizeSteps[] = { 50, 60, 70, 75, 80, 90, 100 };
 static DWORD g_displayItems[10][5];
 static char g_menuSizeText[32] = "MENU SIZE", g_hudSizeText[32] = "HUD SIZE", g_subSizeText[32] = "SUBTITLE SIZE";
-static const DWORD kMenuSizeTextId = 0xD70, kHudSizeTextId = 0xD71, kSubSizeTextId = 0xD72;
+static const DWORD kMenuSizeTextId = 0xD70, kHudSizeTextId = 0xD71, kSubSizeTextId = 0xD74;   // 0xD72/0xD73 are the Controls screen's CAMERA SPEED / AIM SPEED
 
 static void FormatScale(char* out, size_t n, const char* label, int pct) {
     char v[16]; sprintf_s(v, "%.2f", FitScale(pct));
