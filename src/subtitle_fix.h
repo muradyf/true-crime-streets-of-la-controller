@@ -40,9 +40,9 @@ static void SubtitleFixUpdate() {                           // follows the resol
     if (s < 1.0f) s = 1.0f;
     float* m = (float*)(font + 0x10);                       // per-font 2x2 glyph transform (identity 1 0 0 1), used by 0x60B9C0
     if (s == g_subWrittenScale && m[0] == s && m[3] == s && m[1] == 0.0f && m[2] == 0.0f) return;
-    static bool loggedDefault = false;
-    if (!loggedDefault) {
-        loggedDefault = true;
+    static DWORD loggedFont = 0;
+    if (font != loggedFont) {                               // a reload can build a new font object; notice it
+        loggedFont = font;
         Log("subtitles: font %08lX transform was %.3f %.3f %.3f %.3f", font, m[0], m[1], m[2], m[3]);
     }
     m[0] = s; m[1] = 0.0f;

@@ -216,10 +216,17 @@ static void __fastcall EpisodeScreenRenderHook(void* self, void*, void* batch) {
 // At 640x480 that is half a pixel and one stray pixel, which nobody sees. The HUD pass magnifies the whole reticle,
 // so at 2560x1600 the half unit becomes a whole pixel of visible offset and the stray pixel becomes a 2x2 blob.
 //
-// Fix: make every part share the box's centre. The bars grow by one unit in each direction (thickness 1 -> 2, length
-// 9 -> 10), which is the only way an even-width box and a centred bar can agree, and the corner dot is collapsed.
-// 0x60A6B0 writes its far edge at x2 - 1, so the empty rect is x2 = x1 + 1, not x2 = x1: asking for zero gives a
-// backwards quad that still covers a pixel (traced: it moved to 629.5..630.5 instead of disappearing).
+// Quad edges land on k + 0.5, so a span of an even number of units is centred on a half unit and an odd span on a
+// whole one. The box is 16 and the bars are 1, so they can never agree; one of the two has to change parity. The
+// bars are what the player looks at - and the reticle preview in Options > Controls shows them thin - so the box
+// gives way instead: 16 units -> 15, which puts its centre on 639.0 with the bars, and leaves their thickness and
+// length exactly as the game drew them. The whole reticle then sits half a unit (one pixel at 2x) up and left of the
+// screen centre, which is unavoidable for an odd-sized reticle on an even-sized screen, and is where the game's own
+// cross always was.
+//
+// The corner dot is collapsed instead of removed: 0x60A6B0 writes its far edge at x2 - 1, so the empty rect is
+// x2 = x1 + 1, not x2 = x1 - asking for zero gives a backwards quad that still covers a pixel (traced: it moved to
+// 629.5..630.5 instead of disappearing).
 static int g_reticleFix = 1;
 
 static void ReticleFixInstall() {
@@ -228,10 +235,8 @@ static void ReticleFixInstall() {
     const Site sites[] = {
         { 0x4DD42C, { 0x8D, 0x50, 0x02 }, 0x01, "corner dot height" },
         { 0x4DD43C, { 0x8D, 0x51, 0x02 }, 0x01, "corner dot width"  },
-        { 0x4DD498, { 0x8D, 0x50, 0x0A }, 0x0B, "vertical bar length" },
-        { 0x4DD4A9, { 0x8D, 0x51, 0x02 }, 0x03, "vertical bar thickness" },
-        { 0x4DD4F4, { 0x8D, 0x50, 0x02 }, 0x03, "horizontal bar thickness" },
-        { 0x4DD505, { 0x8D, 0x51, 0x0A }, 0x0B, "horizontal bar length" },
+        { 0x4DD3E2, { 0x8D, 0x50, 0x11 }, 0x10, "box height" },
+        { 0x4DD3F2, { 0x8D, 0x51, 0x11 }, 0x10, "box width"  },
     };
     for (const Site& s : sites)
         if (memcmp((BYTE*)s.addr, s.orig, sizeof(s.orig))) {
@@ -239,7 +244,7 @@ static void ReticleFixInstall() {
             return;
         }
     for (const Site& s : sites) PatchBytes(s.addr + 2, &s.want, 1);
-    Log("reticle alignment fix installed (bars centred on the box, corner dot removed)");
+    Log("reticle alignment fix installed (box 16 -> 15 units so the cross centres in it, corner dot removed)");
 }
 
 static void HudFixInstall() {
