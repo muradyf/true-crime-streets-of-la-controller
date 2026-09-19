@@ -392,6 +392,8 @@ static bool InstallHook() {
     return true;
 }
 
+static int g_dpiAware = 1;   // declare the process DPI aware, so the game sees real pixels, not scaled ones
+
 static void LoadConfig(HMODULE self) {
     char path[MAX_PATH]; GetModuleFileNameA(self, path, MAX_PATH);
     char* dot = strrchr(path, '.'); if (dot) strcpy_s(dot, path + MAX_PATH - dot, ".ini");
@@ -435,9 +437,24 @@ static void LoadConfig(HMODULE self) {
     if (g_menuScalePct < 10 || g_menuScalePct > 200) g_menuScalePct = 90;
     if (g_hudScalePct < 10 || g_hudScalePct > 200) g_hudScalePct = 75;
     g_soundFix = (int)GetPrivateProfileIntA("Controller", "MenuSoundVolumeFix", 1, path);
+    g_dpiAware = (int)GetPrivateProfileIntA("Controller", "DpiAware", 1, path);
     DisplayFixLoadConfig(path);
     cfg.debugLog = get("DebugLog", cfg.debugLog);
     if (dot) { strcpy_s(dot, path + MAX_PATH - dot, ".log"); g_log = _fsopen(path, "w", _SH_DENYNO); }   // readable while the game runs
+}
+
+// Windows lies about the screen to a process that has not declared itself DPI aware: at 150% scaling the game reads
+// a 2560x1600 display as 1707x1067, renders at that size and lets the desktop stretch the result, which looks soft and
+// oversized. It also saves the made-up size into TrueCrime.ini as a resolution no display can actually set, which the
+// Display screen then cannot find in its list. The per-exe HIGHDPIAWARE compatibility flag fixes it, but that flag is
+// keyed to the game's full path and is silently lost when the folder is renamed, so declare it here instead.
+// System DPI awareness is what that flag sets, and all this fixed-resolution engine needs.
+static void MakeDpiAware() {
+    if (!g_dpiAware) return;
+    HMODULE user32 = GetModuleHandleA("user32.dll");
+    auto setAware = user32 ? (BOOL(WINAPI*)(void))GetProcAddress(user32, "SetProcessDPIAware") : nullptr;
+    if (!setAware) { Log("DpiAware=1 but SetProcessDPIAware is missing"); return; }
+    Log("process DPI awareness: %s", setAware() ? "system (set here)" : "already set");
 }
 
 BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
@@ -445,6 +462,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(mod);
         LoadConfig(mod);
         Log("TrueCrimeDualSense loaded");
+        MakeDpiAware();
         Log(InstallHook() ? "input hook installed at 0x5EA160" : "input hook NOT installed");
         // call 0x61E5C0 at 0x557C0F (rel32 from 0x557C14 = 0x000C69AC)
         BYTE nameCall[4] = { 0xAC, 0x69, 0x0C, 0x00 };
