@@ -170,14 +170,34 @@ __declspec(naked) static void ApplyModeStub() {             // replaces call 0x6
 // Opening the Display screen (vtable 0x683218 slot 3, 0x56BEE0) never points the resolution/adapter/depth lists at
 // the current settings; only Cancel (0x571430 with 0, from 0x578C1B) does. The lists started on entry 0, so the screen
 // showed "640x480 Res" at any resolution. Run that refresh first; 0x56BEE0 then backs up the selections as before.
+//
+// That refresh (0x571628) walks the resolution table for the current size and stores the loop counter whether or not
+// it matched, so a size that is not in the list leaves the index one past the end. 0x55CE60 then looks that entry up,
+// gets nothing, and dereferences the null it just produced (0x55CE93). A DPI-virtualised desktop reaches the screen
+// that way - at 150% scaling an unaware process renders 2560x1600 as 1707x1067, which no display enumerates - so the
+// refresh only runs when the current size really is in the list; otherwise the lists stay where they were.
+static bool __cdecl CurrentModeListed() {
+    int w = *(int*)0x6B9B98, h = *(int*)0x6B9B9C;
+    int n = g_resCount, max = (int)(sizeof(g_res) / sizeof(g_res[0]));
+    if (n > max) n = max;
+    for (int i = 0; i < n; ++i) if (g_res[i].w == w && g_res[i].h == h) return true;
+    return false;
+}
+
 static DWORD g_displayOpenOrig = 0;
 __declspec(naked) static void DisplayOpenHook() {           // thiscall(screen, arg), ret 4
     __asm {
+        push ecx
+        call CurrentModeListed
+        test al, al
+        pop ecx
+        je keep                                             // unlisted size: the refresh would select a missing entry
         push ecx
         push 0
         mov eax, 0x571430                                   // thiscall(screen, 0): selections and list cursors
         call eax
         pop ecx
+    keep:
         jmp dword ptr [g_displayOpenOrig]
     }
 }
