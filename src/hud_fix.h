@@ -217,16 +217,17 @@ static void __fastcall EpisodeScreenRenderHook(void* self, void*, void* batch) {
 // so at 2560x1600 the half unit becomes a whole pixel of visible offset and the stray pixel becomes a 2x2 blob.
 //
 // Fix: make every part share the box's centre. The bars grow by one unit in each direction (thickness 1 -> 2, length
-// 9 -> 10), which is the only way an even-width box and a centred bar can agree, and the corner dot is given a zero
-// size so it draws nothing.
+// 9 -> 10), which is the only way an even-width box and a centred bar can agree, and the corner dot is collapsed.
+// 0x60A6B0 writes its far edge at x2 - 1, so the empty rect is x2 = x1 + 1, not x2 = x1: asking for zero gives a
+// backwards quad that still covers a pixel (traced: it moved to 629.5..630.5 instead of disappearing).
 static int g_reticleFix = 1;
 
 static void ReticleFixInstall() {
     if (!g_reticleFix) return;
     struct Site { DWORD addr; BYTE orig[3]; BYTE want; const char* what; };
     const Site sites[] = {
-        { 0x4DD42C, { 0x8D, 0x50, 0x02 }, 0x00, "corner dot height" },
-        { 0x4DD43C, { 0x8D, 0x51, 0x02 }, 0x00, "corner dot width"  },
+        { 0x4DD42C, { 0x8D, 0x50, 0x02 }, 0x01, "corner dot height" },
+        { 0x4DD43C, { 0x8D, 0x51, 0x02 }, 0x01, "corner dot width"  },
         { 0x4DD498, { 0x8D, 0x50, 0x0A }, 0x0B, "vertical bar length" },
         { 0x4DD4A9, { 0x8D, 0x51, 0x02 }, 0x03, "vertical bar thickness" },
         { 0x4DD4F4, { 0x8D, 0x50, 0x02 }, 0x03, "horizontal bar thickness" },
