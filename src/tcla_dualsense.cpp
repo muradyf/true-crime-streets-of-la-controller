@@ -435,7 +435,8 @@ static void LoadConfig(HMODULE self) {
     g_menuFillWidth = (int)GetPrivateProfileIntA("Controller", "MenuFillWidth", 0, path);
     g_menuSpread = (int)GetPrivateProfileIntA("Controller", "MenuSpread", g_menuFillWidth ? 100 : 0, path);
     g_uiPixelAspect = (int)GetPrivateProfileIntA("Controller", "UIPixelAspect", 100, path);
-    g_hudTextAspect = (int)GetPrivateProfileIntA("Controller", "HUDTextAspect", 0, path);
+    g_hudTextAspect = (int)GetPrivateProfileIntA("Controller", "HUDTextAspect", 1, path);
+    g_glyphTrace = (int)GetPrivateProfileIntA("Controller", "GlyphTrace", 0, path);
     g_menuBgShape = (int)GetPrivateProfileIntA("Controller", "MenuBackgroundShape", 0, path);
     if (g_menuBgShape && g_menuBgShape < 50) g_menuBgShape = 50;
     if (g_menuBgShape > 400) g_menuBgShape = 400;

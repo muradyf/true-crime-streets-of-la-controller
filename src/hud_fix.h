@@ -233,6 +233,56 @@ static void RestoreHudFonts() {
     g_hudFontCount = 0;
 }
 
+// ---- the button symbols, per glyph
+// The narrowing lives in the font's glyph matrix, which 0x60B9C0 builds once per call, so every glyph in a string
+// gets it - including the button symbols, which are glyphs of that same font (codes 0x80 to 0xA7). The loop does
+// re-read one matrix component per glyph though: at 0x60BEE4 it loads the glyph's width from the record in esi and
+// then "movss xmm3, [esp+0x4C]". If that slot is the x scale, it can be set per glyph, which is the seam.
+// The glyph's index comes from the record's own address: esi = [font+0x28] + 0x18 + index*8, and the first
+// character is 0x20, so the symbols are indices 0x60 to 0x87.
+// The scales the loop uses sit in the frame: the y at [esp+0x4C] and the x at [esp+0x1C0], which "movaps xmm3,
+// [esp+0x1C0]" re-reads for every glyph - found by scanning the frame for the value the font's transform held.
+// So a glyph can be given a different x from its neighbours: for a symbol, x is set to y, which is exactly square,
+// and for everything else it is put back to the font's own x. Self-correcting, so the order of glyphs cannot
+// leave a stale value behind, and it holds for the menus too, where the engine narrows the font rather than us.
+static const int kGlyphScaleX = 0x1C0, kGlyphScaleY = 0x4C;
+static const int kFirstChar = 0x20, kFirstSymbol = 0x80, kLastSymbol = 0xA7;
+static int g_glyphTrace = 0;
+
+static void __cdecl SquareSymbolGlyph(float* frame, DWORD font, DWORD rec) {
+    if (!font || !rec) return;
+    float* m = (float*)(font + 0x10);
+    if (m[0] == m[3] || m[0] <= 0.0f || m[3] <= 0.0f) return;   // nothing narrowed this font; leave it be
+    DWORD table = *(DWORD*)(font + 0x28);
+    if (!table) return;
+    int idx = (int)((rec - table - 0x18) / 8);
+    int ch = idx + kFirstChar;
+    bool symbol = ch >= kFirstSymbol && ch <= kLastSymbol;
+    frame[kGlyphScaleX / 4] = symbol ? frame[kGlyphScaleY / 4] : m[0];
+    if (g_glyphTrace && symbol) {
+        static int n = 0;
+        if (n < 16) { ++n; Log("glyph symbol 0x%02X drawn at x %.3f y %.3f (font x %.3f)",
+                               ch, frame[kGlyphScaleX / 4], frame[kGlyphScaleY / 4], m[0]); }
+    }
+}
+
+__declspec(naked) static void GlyphStub() {                 // replaces 0x60BEE4: movzx ecx,[esi+4]; movss xmm3,[esp+0x4C]
+    __asm {
+        pushad
+        push esi                                            // the glyph record
+        push ebx                                            // the font
+        lea eax, [esp + 0x28]                               // the function's esp, before pushad and the two pushes
+        push eax
+        call SquareSymbolGlyph
+        add esp, 12
+        popad
+        movzx ecx, byte ptr [esi + 4]                       // the two instructions replaced
+        movss xmm3, dword ptr [esp + 0x4C]
+        push 0x60BEEE
+        ret
+    }
+}
+
 __declspec(naked) static void HudTextStub() {               // replaces the prologue of 0x60B9C0
     __asm {
         pushad
@@ -431,6 +481,11 @@ static void HudFixInstall() {
         WriteJmp(0x60B9C0, &HudTextStub, sizeof(textOrig));
         Log("HUD font aspect installed (0x60B9C0)");
     } else Log("text draw bytes differ, HUD font aspect not installed");
+    const BYTE glyphOrig[] = { 0x0F, 0xB6, 0x4E, 0x04, 0xF3, 0x0F, 0x10, 0x5C, 0x24, 0x4C };
+    if (memcmp((BYTE*)0x60BEE4, glyphOrig, sizeof(glyphOrig)) == 0) {
+        WriteJmp(0x60BEE4, &GlyphStub, sizeof(glyphOrig));
+        Log("glyph hook installed (0x60BEE4)");
+    } else Log("glyph loop bytes differ, per-glyph hook not installed");
 
     DWORD* slot = (DWORD*)0x68207C;
     if (*slot == 0x568390) {
