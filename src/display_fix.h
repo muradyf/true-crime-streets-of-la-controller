@@ -25,6 +25,7 @@ static char g_modIniPath[MAX_PATH] = "";
 struct ResEntry { int w, h; };
 static ResEntry g_res[16] = { { 640, 480 }, { 800, 600 }, { 1024, 768 }, { 1152, 864 }, { 1280, 960 } };
 static int g_resCount = 5;
+static int g_resCap = 16;
 static char g_resListText[16 * 12] = "";
 static DWORD g_loggedRenderer = 0;
 
@@ -70,7 +71,9 @@ static void AddRes(ResEntry* all, int& n, int w, int h) {
     all[n++] = { w, h };
 }
 
-static void BuildResTable() {
+static void BuildResTable(int maxEntries) {
+    if (maxEntries < 1) maxEntries = 1;
+    if (maxEntries > 16) maxEntries = 16;
     ResEntry all[256]; int n = 0;
     DEVMODEA dm = {}; dm.dmSize = sizeof(dm);
     for (DWORD i = 0; EnumDisplaySettingsA(nullptr, i, &dm); ++i)
@@ -92,8 +95,8 @@ static void BuildResTable() {
     };
     bool keep[256] = {};
     int kept = 0;
-    for (int r = 0; r <= 4 && kept < 16; ++r)
-        for (int i = n - 1; i >= 0 && kept < 16; --i)           // larger sizes first within a rank
+    for (int r = 0; r <= 4 && kept < maxEntries; ++r)
+        for (int i = n - 1; i >= 0 && kept < maxEntries; --i)   // larger sizes first within a rank
             if (!keep[i] && rank(all[i]) == r) { keep[i] = true; ++kept; }
     g_resCount = 0;
     for (int i = 0; i < n; ++i) if (keep[i]) g_res[g_resCount++] = all[i];
@@ -216,6 +219,24 @@ static const int kRowTopUnits = 85, kRowPitchUnits = 16, kPopupTopUnits = 233;
 // "SUBTITLE SIZE 1.25X", runs to about 254, measured from the text draws at 2560x1600. In layout units, so it holds
 // at any resolution, menu size or spread - a fraction of the screen or of the safe rect would not.
 static const int kColumnRightUnits = 270;
+// A pop-up line takes 16 units and the screen title sits at 321, so five lines fit below 233 with the last line's
+// glyphs still clear of it. An entry takes at most 136 units across ("1680x1050 Res" at the widest, from the six
+// that fitted 818 units of usable width), so the list can only show as many sizes as five lines of those hold.
+// Below about a third of the screen - MenuSpread=0 leaves 338 units - sixteen sizes would need seven lines and run
+// into the title, so the table is rebuilt smaller. It is rebuilt rather than truncated because the entries are
+// stored in size order while the choice of which to keep is ranked (desktop size first, then its shape, then 16:9),
+// and cutting the tail would drop the desktop size, which is the one that matters most.
+static const int kPopupLines = 5, kEntryWidthUnits = 136;
+
+static int ResCapacity() {
+    float sx = *(float*)0x6AEA00;
+    if (sx <= 0) return 16;
+    int usable = (int)((*(int*)0x7280F4 - (g_uiOffX + (int)(kColumnRightUnits * sx))) / sx);
+    int perLine = usable / kEntryWidthUnits;
+    if (perLine < 1) perLine = 1;
+    int cap = perLine * kPopupLines;
+    return cap > 16 ? 16 : cap;
+}
 
 static int g_popupShift = 0;
 static DWORD g_dispScreen = 0;   // the Display screen, stashed by DisplayOpenHook
@@ -280,8 +301,14 @@ static void __fastcall BeforeListLayout(DWORD container) {
         if (!g_dispLists[i] && slot < 0) slot = i;
     }
     if (slot >= 0) g_dispLists[slot] = container;
-    if (g_displayTrace)
-        Log("display: list %08lX y %d, rect %d..%d", container, *y, *(int*)0x7280F0, *(int*)0x7280F4);
+    if (g_displayTrace) {
+        int left = *(int*)0x7280F0, right = *(int*)0x7280F4;
+        float sx = *(float*)0x6AEA00;
+        int limit = g_uiOffX + (int)(kColumnRightUnits * sx);
+        Log("display: list %08lX y %d, rect %d..%d, limit %d, usable %.0f units (menu %d%%, spread %d, %dx%d)",
+            container, *y, left, right, limit, sx > 0 ? (right - limit) / sx : 0.0f,
+            g_menuScalePct, g_menuSpread, ScreenW(), ScreenH());
+    }
 }
 
 __declspec(naked) static void ListLayoutStub() {            // replaces "push 0; call [eax+0x2C]"
@@ -470,7 +497,7 @@ static void DisplayFixLoadConfig(const char* iniPath) {
     strcpy_s(g_modIniPath, iniPath);
     g_displayFix = (int)GetPrivateProfileIntA("Controller", "DisplayFix", 1, iniPath);
     g_displayTrace = (int)GetPrivateProfileIntA("Controller", "DisplayTrace", 0, iniPath);
-    if (g_displayFix) BuildResTable();                       // after BorderlessDecide (desktop size)
+    if (g_displayFix) BuildResTable(16);                     // after BorderlessDecide (desktop size)
 }
 
 static void DisplayFixUpdate() {                             // every input update
@@ -482,6 +509,13 @@ static void DisplayFixUpdate() {                             // every input upda
         Log("display: adapter \"%s\", %d modes enumerated", adapter ? (const char*)(adapter + 0x228) : "?", *(int*)(renderer + 0x20));
     }
     UpdateSizeLabels();
+    int cap = ResCapacity();                                 // before the screen is built, which is when Options opens
+    if (cap != g_resCap) {
+        g_resCap = cap;
+        BuildResTable(cap);
+        Log("display: resolution list holds %d of %d lines' worth (%d entries): %s",
+            cap, kPopupLines, g_resCount, g_resListText);
+    }
     if (g_displayTrace && g_dispDump > 0 && --g_dispDump == 0) { DisplayDumpElements(); g_dispDump = 180; }
     if (g_borderlessActive) BorderlessOnDeviceCreated();     // after a runtime switch the device may have been Reset
 }
