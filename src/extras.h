@@ -1,4 +1,4 @@
-// Rumble, lightbar and adaptive triggers for TrueCrimeDualSense.
+// Rumble and lightbar for TrueCrimeDualSense.
 // Included from tcla_dualsense.cpp after g_ds, cfg, Log and State are defined.
 //
 // Rumble: the game's vibration manager (0x551350) calls 0x5FE480(motorA, motorB) on the input block with
@@ -9,8 +9,6 @@
 struct ExtrasConfig {
     int rumble = 1;              // forward the game's vibration to the DualSense motors
     int rumbleStrength = 100;    // percent
-    int triggerEffects = 1;      // adaptive trigger resistance on R2 when a weapon is out
-    int triggerStrength = 40;    // percent of full resistance force; 0xB0 of 0xFF was the original 69%
     int lightbar = 1;
     int lightR = 0, lightG = 40, lightB = 255;   // police blue
 } xcfg;
@@ -21,7 +19,7 @@ static int g_gameMotorA = 0, g_gameMotorB = 0;
 static bool g_loggedWrite = false;
 
 static int g_vibCalls = 0, g_vibNonZero = 0, g_vibMaxA = 0, g_vibMaxB = 0;
-static int g_outWrites = 0, g_outErrors = 0, g_outTriggerOn = 0;
+static int g_outWrites = 0, g_outErrors = 0;
 static ULONGLONG g_nextExtrasReport = 0;
 
 static void __stdcall OnGameVibrate(int motorA, int motorB) {   // replaces 0x5FE480 (ret 8)
@@ -39,20 +37,16 @@ static void __stdcall OnGameVibrate(int motorA, int motorB) {   // replaces 0x5F
 static void ExtrasReport() {
     if (!cfg.debugLog || GetTickCount64() < g_nextExtrasReport) return;
     g_nextExtrasReport = GetTickCount64() + 1000;
-    if (!g_vibNonZero && !g_outErrors && !g_outTriggerOn) { g_vibCalls = 0; g_outWrites = 0; return; }
-    Log("extras: game vibration calls=%d nonzero=%d max=(%d,%d) | output writes=%d errors=%d (last %lu) | R2 effect frames=%d",
-        g_vibCalls, g_vibNonZero, g_vibMaxA, g_vibMaxB, g_outWrites, g_outErrors, g_ds.LastWriteError(), g_outTriggerOn);
-    g_vibCalls = g_vibNonZero = g_vibMaxA = g_vibMaxB = g_outWrites = g_outErrors = g_outTriggerOn = 0;
+    if (!g_vibNonZero && !g_outErrors) { g_vibCalls = 0; g_outWrites = 0; return; }
+    Log("extras: game vibration calls=%d nonzero=%d max=(%d,%d) | output writes=%d errors=%d (last %lu)",
+        g_vibCalls, g_vibNonZero, g_vibMaxA, g_vibMaxB, g_outWrites, g_outErrors, g_ds.LastWriteError());
+    g_vibCalls = g_vibNonZero = g_vibMaxA = g_vibMaxB = g_outWrites = g_outErrors = 0;
 }
 
 static void ExtrasLoadConfig(const char* iniPath) {
     auto get = [&](const char* k, int def) { return (int)GetPrivateProfileIntA("Controller", k, def, iniPath); };
     xcfg.rumble = get("Rumble", xcfg.rumble);
     xcfg.rumbleStrength = get("RumbleStrength", xcfg.rumbleStrength);
-    xcfg.triggerEffects = get("TriggerEffects", xcfg.triggerEffects);
-    xcfg.triggerStrength = get("TriggerStrength", xcfg.triggerStrength);
-    if (xcfg.triggerStrength < 0) xcfg.triggerStrength = 0;
-    if (xcfg.triggerStrength > 100) xcfg.triggerStrength = 100;
     xcfg.lightbar = get("Lightbar", xcfg.lightbar);
     xcfg.lightR = get("LightbarRed", xcfg.lightR);
     xcfg.lightG = get("LightbarGreen", xcfg.lightG);
@@ -72,13 +66,7 @@ static void ExtrasInstallHooks() {
     Log("vibration hook installed at 0x5FE480");
 }
 
-// Adaptive trigger "section" resistance (mode 0x02: start, end, force), as used by DualSense tools.
-static void SetTriggerSection(uint8_t* t, uint8_t start, uint8_t end, uint8_t force) {
-    memset(t, 0, 11);
-    t[0] = 0x02; t[1] = start; t[2] = end; t[3] = force;
-}
-
-static void ExtrasUpdate(int state, bool padActive) {
+static void ExtrasUpdate(int, bool padActive) {
     if (!g_ds.IsOpen() || !padActive) return;
     PadOutput o;
     if (xcfg.rumble) {
@@ -87,10 +75,7 @@ static void ExtrasUpdate(int state, bool padActive) {
     }
     if (xcfg.lightbar) { o.red = (uint8_t)xcfg.lightR; o.green = (uint8_t)xcfg.lightG; o.blue = (uint8_t)xcfg.lightB; }
     o.playerLeds = 0x04;                                  // centre LED = player 1
-    if (xcfg.triggerEffects && (state == 2 /*Gun*/ || state == 5 /*Driver: R2 fires*/ || state == 4 /*Stealth: tranquiliser*/))
-        SetTriggerSection(o.rightTrigger, 0x50, 0xA0, (uint8_t)(xcfg.triggerStrength * 255 / 100));
     g_out = o;
-    if (o.rightTrigger[0]) ++g_outTriggerOn;
 
     // Send on change, and refresh every 2 s in case the controller dropped the state (e.g. reconnect).
     if (g_out != g_sentOut || GetTickCount64() >= g_nextOutputRefresh) {

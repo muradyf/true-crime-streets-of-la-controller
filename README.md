@@ -1,7 +1,7 @@
 # True Crime: Streets of LA — Controller Mod (PC)
 
 Native analog controller support for the 2004 PC version of *True Crime: Streets of LA*, with DualSense button prompts,
-rumble, adaptive triggers and a few engine fixes. Works with a PS5 DualSense (USB or Bluetooth, no DS4Windows needed)
+rumble and a few engine fixes. Works with a PS5 DualSense (USB or Bluetooth, no DS4Windows needed)
 and with any XInput (Xbox) controller.
 
 The PC port ships with the Xbox version's controller code, but the gameplay loop never reads the joystick — which is why
@@ -18,7 +18,7 @@ fully analog.
 | DualSense over USB and Bluetooth, XInput fallback | tested |
 | DualSense button icons in tutorials and help text | experimental |
 | Rumble (the game computes vibration, the PC build discarded it) | experimental |
-| Lightbar colour and R2 resistance when a weapon is out | experimental |
+| Lightbar colour | experimental |
 | Fix for the crash when the game re-creates its graphics device (e.g. after a mission) | experimental |
 | "save game" option in the pause menu | experimental |
 | Menus, HUD and text scaled for high resolutions; full-screen layouts centred in 4:3 | tested (2560×1600 menus) |

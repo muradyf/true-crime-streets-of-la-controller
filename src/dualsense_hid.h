@@ -29,7 +29,8 @@ struct PadState {
     bool bluetooth = false;
 };
 
-// Output state: rumble motors, lightbar, player LEDs and the two adaptive trigger effects.
+// Output state: rumble motors, lightbar, player LEDs and the two trigger effect slots (left unset - the mod does
+// not drive the adaptive triggers; the report keeps its shape so the fields stay where the hardware expects them).
 struct PadOutput {
     uint8_t motorLeft = 0, motorRight = 0;            // left = strong/low-frequency, right = weak/high-frequency
     uint8_t red = 0, green = 0, blue = 0;
