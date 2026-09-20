@@ -15,7 +15,7 @@
 
 static int g_hudFix = 1;
 static int g_inHud = 0;
-static float g_hudScale = 1.0f;
+static float g_hudScale = 1.0f, g_hudScaleX = 1.0f;
 static float g_hudRealW = 0.0f, g_hudRealH = 0.0f;      // the pass's real pixel size, for centring the reticle
 
 struct VirtualUiState {
@@ -124,11 +124,14 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
     // the same stroke rasterises to 2 pixels on one side of the reticle and 3 on the other, and no rounding of the
     // positions can fix that. The reticle is drawn from whole numbers about the centre of the screen, so it is given a
     // whole-number scale of its own and placed on the real centre; the rest of the HUD keeps the chosen size.
-    float s = g_hudScale;
+    float s = g_hudScale, sx = g_hudScaleX;
     float sr = g_reticleScale > 0 ? (float)g_reticleScale : floorf(s + 0.5f);
     if (sr < 1.0f) sr = 1.0f;
     const DWORD want = ReticleColour();
-    const bool snap = g_reticleFix && sr != s && g_hudRealW > 0.0f;
+    // The reticle is drawn from whole numbers rather than authored art, and it has to stay square, so it keeps the
+    // uniform scale while the rest of the pass takes the narrower one - which means it needs the centring branch
+    // whenever the two differ, not only when the HUD size is fractional.
+    const bool snap = g_reticleFix && (sr != s || sx != s) && g_hudRealW > 0.0f;
     const float vcx = ScreenW() * 0.5f - 0.5f, vcy = ScreenH() * 0.5f - 0.5f;
     const float rcx = g_hudRealW * 0.5f - 0.5f, rcy = g_hudRealH * 0.5f - 0.5f;
     for (p = from; (BYTE*)p + 0x24 <= (BYTE*)end; p = (float*)((BYTE*)p + 0x24)) {
@@ -137,7 +140,7 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
             p[0] = (p[0] - vcx) * sr + rcx;
             p[1] = (p[1] - vcy) * sr + rcy;
         } else {
-            p[0] = (p[0] + 0.5f) * s - 0.5f;
+            p[0] = (p[0] + 0.5f) * sx - 0.5f;
             p[1] = (p[1] + 0.5f) * s - 0.5f;
         }
     }
@@ -166,6 +169,12 @@ __declspec(naked) static void HudFlushStub() {              // replaces 0x609FD0
 // s = real pixels per virtual pixel. hudLayout: rebuild the safe rect and centring offsets from the game's own
 // margins in the virtual screen (HUD has its own size); otherwise divide the current menu layout by s so the pass
 // matches the surrounding menu exactly.
+// UIPixelAspect reaches the menus through the scale globals, which this pass deliberately sets to 1 - so without
+// help the HUD would keep the port's stretch that the menus no longer have. It cannot simply be applied at the
+// flush: narrowing x there alone would drag everything anchored to the right edge in by the same fifth. The virtual
+// screen is made that much wider instead, so the game still places those elements at its edge and the flush maps
+// that edge back onto the real one, while a glyph of a given virtual width comes out narrower - the same trade the
+// menus make. The nested pass keeps whatever ratio the menu around it already has.
 static void BeginVirtualUi(VirtualUiState& st, const char* name, float s, bool hudLayout) {
     int w = ScreenW(), h = ScreenH();
     if (!g_hudFix || g_inHud || s <= 1.0f) return;         // nested passes keep the outer virtual space
@@ -174,7 +183,11 @@ static void BeginVirtualUi(VirtualUiState& st, const char* name, float s, bool h
     st.scaleX = *(float*)0x6AEA00; st.scaleY = *(float*)0x6AEA04;
     memcpy(st.rect, (void*)0x7280F0, sizeof(st.rect));
 
-    int vw = (int)(w / s + 0.5f), vh = (int)(h / s + 0.5f);
+    float aspect = hudLayout ? g_uiPixelAspect / 100.0f
+                             : (st.scaleY > 0 ? st.scaleX / st.scaleY : 1.0f);
+    if (aspect <= 0.0f) aspect = 1.0f;
+    float sx = s * aspect;
+    int vw = (int)(w / sx + 0.5f), vh = (int)(h / s + 0.5f);
     *(float*)0x6AEA00 = 1.0f;
     *(float*)0x6AEA04 = 1.0f;
     *(int*)0x6B9B98 = vw;
@@ -194,6 +207,7 @@ static void BeginVirtualUi(VirtualUiState& st, const char* name, float s, bool h
         g_uiOffY = (int)(st.offY / s + 0.5f);
     }
     g_hudScale = s;
+    g_hudScaleX = sx;
     g_hudRealW = (float)w;
     g_hudRealH = (float)h;
     NoteBatchWritePointers();
@@ -203,14 +217,15 @@ static void BeginVirtualUi(VirtualUiState& st, const char* name, float s, bool h
     unsigned bit = hudLayout ? 1u : 2u;
     if (!(loggedMask & bit)) {
         loggedMask |= bit;
-        Log("%s pass: virtual %dx%d, safe rect %d,%d-%d,%d, offset %d,%d, scale %.3f", name, vw, vh,
-            *(int*)0x7280F0, *(int*)0x7280F8, *(int*)0x7280F4, *(int*)0x7280FC, g_uiOffX, g_uiOffY, s);
+        Log("%s pass: virtual %dx%d, safe rect %d,%d-%d,%d, offset %d,%d, scale %.3f x %.3f", name, vw, vh,
+            *(int*)0x7280F0, *(int*)0x7280F8, *(int*)0x7280F4, *(int*)0x7280FC, g_uiOffX, g_uiOffY, sx, s);
     }
 }
 
 static void EndVirtualUi(const VirtualUiState& st) {
     if (!st.active) return;
     g_inHud = 0;
+    g_hudScaleX = g_hudScale;
     *(int*)0x6B9B98 = st.w;
     *(int*)0x6B9B9C = st.h;
     memcpy((void*)0x7280F0, st.rect, sizeof(st.rect));
