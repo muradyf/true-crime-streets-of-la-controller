@@ -249,20 +249,28 @@ static const int kGlyphScaleX = 0x1C0, kGlyphScaleY = 0x4C;
 static const int kFirstChar = 0x20, kFirstSymbol = 0x80, kLastSymbol = 0xA7;
 static int g_glyphTrace = 0;
 
+// The letter scale is whatever the engine last put in the slot - the font's transform in the HUD, the UI scale
+// globals in the menus - so it is read from the frame rather than from the font: anything there that is not the
+// value written last time is the engine's, and becomes the new baseline. That covers both, which the earlier
+// version did not: it skipped whenever the font's own transform was square, and in the menus it always is, so the
+// loading screen hints and the controls screen kept their squashed symbols.
+static float g_glyphBaseX = 0.0f, g_glyphWroteX = -1.0f;
+
 static void __cdecl SquareSymbolGlyph(float* frame, DWORD font, DWORD rec) {
     if (!font || !rec) return;
-    float* m = (float*)(font + 0x10);
-    if (m[0] == m[3] || m[0] <= 0.0f || m[3] <= 0.0f) return;   // nothing narrowed this font; leave it be
     DWORD table = *(DWORD*)(font + 0x28);
     if (!table) return;
-    int idx = (int)((rec - table - 0x18) / 8);
-    int ch = idx + kFirstChar;
+    float x = frame[kGlyphScaleX / 4], y = frame[kGlyphScaleY / 4];
+    if (x != g_glyphWroteX) g_glyphBaseX = x;               // the engine wrote it: that is the letter scale
+    if (g_glyphBaseX <= 0.0f || y <= 0.0f) return;
+    int ch = (int)((rec - table - 0x18) / 8) + kFirstChar;
     bool symbol = ch >= kFirstSymbol && ch <= kLastSymbol;
-    frame[kGlyphScaleX / 4] = symbol ? frame[kGlyphScaleY / 4] : m[0];
+    float want = symbol ? y : g_glyphBaseX;                 // a symbol is square; a letter keeps the line's scale
+    frame[kGlyphScaleX / 4] = want;
+    g_glyphWroteX = want;
     if (g_glyphTrace && symbol) {
         static int n = 0;
-        if (n < 16) { ++n; Log("glyph symbol 0x%02X drawn at x %.3f y %.3f (font x %.3f)",
-                               ch, frame[kGlyphScaleX / 4], frame[kGlyphScaleY / 4], m[0]); }
+        if (n < 16) { ++n; Log("glyph symbol 0x%02X: x %.3f -> %.3f, y %.3f", ch, g_glyphBaseX, want, y); }
     }
 }
 
