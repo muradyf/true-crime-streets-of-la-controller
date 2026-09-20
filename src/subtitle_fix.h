@@ -12,7 +12,9 @@
 //     font line height * lines at 1x, so that height is multiplied by the scale too;
 //   - wrap width: 0x4AEB10 sizes the element W/640 * 512 (mulss [0x67AEC4] at 0x4AEB6A, a shared constant), and
 //     lines are broken to that width at 1x; it now points at 512 / scale so scaled lines still fit the screen.
-// SubtitleScale: 0 = follow MenuScale, otherwise percent of filling the screen height (like MenuScale).
+// SubtitleScale: 0 = AUTO (follow MenuScale), otherwise a direct multiple of the size the game itself draws,
+// x100 - so 100 is the original subtitle, 150 is half again. Sharing MenuScale's "percent of the screen height"
+// scale made the smallest step 1.67x at 1600 lines, which is already too big for a line of dialogue.
 #pragma once
 
 static float g_subScale = 1.0f;
@@ -39,7 +41,7 @@ static void SubtitleFixUpdate() {                           // follows the resol
     if (!g_subtitleFix) return;
     DWORD font = *(DWORD*)0x6D9560;                         // subtitle font object (Font_Subtitles.fnt)
     if (!font) return;
-    float s = FitScale(g_subtitleScalePct > 0 ? g_subtitleScalePct : g_menuScalePct);
+    float s = g_subtitleScalePct > 0 ? g_subtitleScalePct / 100.0f : FitScale(g_menuScalePct);
     if (s < 1.0f) s = 1.0f;
     float* m = (float*)(font + 0x10);                       // per-font 2x2 glyph transform (identity 1 0 0 1), used by 0x60B9C0
     if (s == g_subWrittenScale && m[0] == s && m[3] == s && m[1] == 0.0f && m[2] == 0.0f) return;

@@ -213,6 +213,9 @@ static const DWORD kMenuSizeTextId = 0xD70, kHudSizeTextId = 0xD71, kSubSizeText
 // The reticle takes whole multiples only: a stroke one unit thick has to land on a whole number of pixels or it
 // rasterises unevenly around the box. AUTO rounds the HUD size to the nearest whole multiple.
 static const int kReticleSteps[] = { 1, 2, 3, 4, 5 };
+// Subtitles step in multiples of their own size instead, x100, because a line of dialogue wants to be a little
+// bigger than the game drew it, not a fraction of the screen height.
+static const int kSubtitleSteps[] = { 100, 125, 150, 175, 200, 250, 300 };
 
 static void FormatScale(char* out, size_t n, const char* label, int pct) {
     char v[16]; sprintf_s(v, "%.2f", FitScale(pct));
@@ -225,8 +228,13 @@ static void FormatScale(char* out, size_t n, const char* label, int pct) {
 static void UpdateSizeLabels() {
     FormatScale(g_menuSizeText, sizeof(g_menuSizeText), "MENU SIZE", g_menuScalePct);
     FormatScale(g_hudSizeText, sizeof(g_hudSizeText), "HUD SIZE", g_hudScalePct);
-    if (g_subtitleScalePct > 0) FormatScale(g_subSizeText, sizeof(g_subSizeText), "SUBTITLE SIZE", g_subtitleScalePct);
-    else sprintf_s(g_subSizeText, sizeof(g_subSizeText), "SUBTITLE SIZE AUTO");
+    if (g_subtitleScalePct > 0) {
+        char v[16]; sprintf_s(v, "%.2f", g_subtitleScalePct / 100.0f);
+        size_t len = strlen(v);
+        while (len && v[len - 1] == '0') v[--len] = 0;
+        if (len && v[len - 1] == '.') v[--len] = 0;
+        sprintf_s(g_subSizeText, sizeof(g_subSizeText), "SUBTITLE SIZE %sX", v);
+    } else sprintf_s(g_subSizeText, sizeof(g_subSizeText), "SUBTITLE SIZE AUTO");
     if (g_reticleScale > 0) sprintf_s(g_retSizeText, sizeof(g_retSizeText), "RETICLE SIZE %dX", g_reticleScale);
     else sprintf_s(g_retSizeText, sizeof(g_retSizeText), "RETICLE SIZE AUTO");
     char** table = *(char***)0x72831C;
@@ -253,8 +261,12 @@ static char __fastcall SizeRowCallback(void*, void*, int which, int) {   // call
         int next = 0;
         for (int v : kReticleSteps) if (v > pct) { next = v; break; }
         pct = next;
+    } else if (which == 2) {
+        int next = 0;                                       // 0 = AUTO, then the multiples in order
+        for (int v : kSubtitleSteps) if (v > pct) { next = v; break; }
+        pct = next;
     } else {
-        pct = (which == 2 && pct >= kSizeSteps[_countof(kSizeSteps) - 1]) ? 0 : NextSizeStep(pct);
+        pct = NextSizeStep(pct);
     }
     WriteIniInt("Controller", kSizeRowKey[which], pct, g_modIniPath);
     ApplyUiScale();
@@ -263,6 +275,9 @@ static char __fastcall SizeRowCallback(void*, void*, int which, int) {   // call
     if (which == 3)
         Log("display: reticle size %s (HUD %.3f at %dx%d)", pct > 0 ? "fixed" : "AUTO",
             FitScale(g_hudScalePct), ScreenW(), ScreenH());
+    else if (which == 2)
+        Log("display: subtitle size %s (%.3f at %dx%d)", pct > 0 ? "fixed" : "AUTO",
+            pct > 0 ? pct / 100.0f : FitScale(g_menuScalePct), ScreenW(), ScreenH());
     else
         Log("display: %s %d%% (%.3f at %dx%d)", kSizeRowName[which], pct,
             FitScale(pct > 0 ? pct : g_menuScalePct), ScreenW(), ScreenH());
