@@ -433,6 +433,7 @@ static void LoadConfig(HMODULE self) {
     g_movieFix = (int)GetPrivateProfileIntA("Controller", "MovieAspectFix", 1, path);
     g_menuBgAspect = (int)GetPrivateProfileIntA("Controller", "MenuBackgroundAspect", 1, path);
     g_menuFillWidth = (int)GetPrivateProfileIntA("Controller", "MenuFillWidth", 0, path);
+    g_menuSpread = (int)GetPrivateProfileIntA("Controller", "MenuSpread", g_menuFillWidth ? 100 : 0, path);
     g_uiPixelAspect = (int)GetPrivateProfileIntA("Controller", "UIPixelAspect", 100, path);
     g_menuBgShape = (int)GetPrivateProfileIntA("Controller", "MenuBackgroundShape", 0, path);
     if (g_menuBgShape && g_menuBgShape < 50) g_menuBgShape = 50;

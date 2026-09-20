@@ -16,6 +16,7 @@
 static int g_uiFix = 1, g_movieFix = 1;
 static int g_menuBgAspect = 1;   // 0 = let the menu background stretch to the full screen, bars and all
 static int g_menuFillWidth = 0;  // 1 = anchor menu items to the real screen edges instead of the centred 4:3 box
+static int g_menuSpread = 0;     // percent of the way from the centred 4:3 box to the full screen width
 static int g_uiPixelAspect = 100;// horizontal scale as a percent of the vertical one; 80 undoes the port's stretch
 static int g_menuBgShape = 0;    // menu background aspect x100 (170 = 1.70); 0 = leave the game's own stretch
 static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
@@ -35,11 +36,14 @@ static float FitScale(int pct) {
 }
 static float UiScale() { return FitScale(g_menuScalePct); }
 
-// MenuFillWidth: the 640x480 layout is 4:3, so on a wider screen it can either keep its shape - centred, with the
-// side margins that leaves - or let its horizontally anchored items reach the real screen edges the way the game
-// originally placed them. Keeping the shape is the default because it lines the right-hand menu items up with the
-// logo and the art, which share the box; filling the width spreads the menu across the whole screen but breaks that
-// alignment, since the logo stays where the 4:3 composition puts it. Vertical placement is untouched either way.
+// MenuSpread: the 640x480 layout is 4:3, so on a wider screen it is drawn 640*sx wide and centred, which leaves a
+// margin each side. MenuScale decides how big that box is, and because one scale drives both the glyph size and the
+// placement, turning it up to fill the width makes the text bigger with it. MenuSpread is the other half of that:
+// it widens the box the anchors work against without touching the scale, so the menu can spread across the screen
+// at whatever text size MenuScale asks for. 0 keeps the 4:3 shape, 100 reaches the real screen edges the way the
+// game originally placed things, and values in between walk from one to the other. What it costs is alignment - the
+// logo sits where the 4:3 composition puts it, so the further the anchored items travel, the less they line up with
+// it. MenuFillWidth=1 is the old name for MenuSpread=100. Vertical placement is untouched either way.
 // UIPixelAspect: the 2D UI was drawn for a 512 pixel wide frame buffer and this port hands it 640, so every glyph
 // and every piece of menu art comes out a quarter wider than it was authored - visible against the PS2 release, and
 // present at 640x480 with every fix here turned off, so it belongs to the port rather than to this code. The X scale
@@ -51,12 +55,13 @@ static void ApplyUiScale() {
     *(float*)0x6AEA04 = s;
     int w = ScreenW(), h = ScreenH();
     int offX = (int)((w - 640.0f * sx) / 2.0f), offY = (int)((h - 480.0f * s) / 2.0f);
-    g_uiOffX = g_menuFillWidth ? 0 : (offX > 0 ? offX : 0);
+    int spread = g_menuSpread < 0 ? 0 : (g_menuSpread > 100 ? 100 : g_menuSpread);
+    if (offX < 0) offX = 0;
+    g_uiOffX = (int)(offX * (1.0f - spread / 100.0f));
     g_uiOffY = offY > 0 ? offY : 0;
     if (g_rectKnown) {
-        int rectOffX = g_menuFillWidth ? 0 : g_uiOffX;
-        *(int*)0x7280F0 = rectOffX + (int)(g_rectMargins[0] * sx);
-        *(int*)0x7280F4 = w - rectOffX - (int)(g_rectMargins[2] * sx);
+        *(int*)0x7280F0 = g_uiOffX + (int)(g_rectMargins[0] * sx);
+        *(int*)0x7280F4 = w - g_uiOffX - (int)(g_rectMargins[2] * sx);
         *(int*)0x7280F8 = g_uiOffY + (int)(g_rectMargins[1] * s);
         *(int*)0x7280FC = h - g_uiOffY - (int)(g_rectMargins[3] * s);
     }
