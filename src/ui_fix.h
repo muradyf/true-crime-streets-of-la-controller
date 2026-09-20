@@ -14,6 +14,7 @@
 #pragma once
 
 static int g_uiFix = 1, g_movieFix = 1;
+static int g_menuBgAspect = 1;   // 0 = let the menu background stretch to the full screen, bars and all
 static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
 static int g_subtitleScalePct = 0;                      // same, for cutscene subtitles; 0 = follow the menu size
 static int g_reticleScale = 0;                          // whole-number aim reticle scale; 0 = follow the HUD size
@@ -128,6 +129,93 @@ __declspec(naked) static void StreakYStub() {               // replaces 0x55B10D
     }
 }
 
+// Mission objective counter ("0/10", top right, drawn at 0x4DBEE0). It positions itself against the screen -
+// x = GetScreenW() - 8, y = 14 - and passes both through the anchor helpers with no anchor flags, which lands them on
+// the unanchored path. That path is one of the sites UIScaleFix replaces, and the replacement adds the offset that
+// centres a 640x480 layout on a wider screen. The counter's coordinate is already screen-absolute, so the offset is
+// added to something that never needed it:
+//
+//     traced in the HUD pass, virtual screen 1280x800, offsets 320,160
+//     x = (1280 - 8) * 1.0 + 320 = 1592   on a 1280 wide screen - 312 past the right edge
+//     y = (14)       * 1.0 + 160 = 174
+//
+// which is why the counter vanished the moment UIScaleFix was turned on, while its font, transform and draw call were
+// all perfectly healthy. Take the offset back off again for this one element.
+static int __cdecl CounterAnchorX(int v, int flags) {
+    return ((int(__cdecl*)(int, int))0x4CB6D0)(v, flags) - g_uiOffX;
+}
+
+static int __cdecl CounterAnchorY(int v, int flags) {
+    return ((int(__cdecl*)(int, int))0x4CB760)(v, flags) - g_uiOffY;
+}
+
+static void ObjectiveCounterFixInstall() {
+    if (!g_uiFix) return;
+    const BYTE origX[] = { 0xE8, 0xC2, 0xF7, 0xFE, 0xFF };   // call 0x4CB6D0
+    const BYTE origY[] = { 0xE8, 0x46, 0xF8, 0xFE, 0xFF };   // call 0x4CB760
+    if (memcmp((BYTE*)0x4DBF09, origX, sizeof(origX)) || memcmp((BYTE*)0x4DBF15, origY, sizeof(origY))) {
+        Log("objective counter anchors differ, not patched");
+        return;
+    }
+    DWORD old;
+    VirtualProtect((LPVOID)0x4DBF09, 17, PAGE_EXECUTE_READWRITE, &old);
+    *(int*)(0x4DBF09 + 1) = (int)((BYTE*)&CounterAnchorX - (BYTE*)(0x4DBF09 + 5));
+    *(int*)(0x4DBF15 + 1) = (int)((BYTE*)&CounterAnchorY - (BYTE*)(0x4DBF15 + 5));
+    VirtualProtect((LPVOID)0x4DBF09, 17, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), (LPVOID)0x4DBF09, 17);
+    Log("objective counter fix installed (0x4DBF09, 0x4DBF15)");
+}
+
+// CounterTrace=1 (debug): the mission objective counter ("0/10", drawn at 0x4DBEE0) is reached - its position code
+// runs - but no pixels appear anywhere on screen. 0x60B9C0 only builds its glyph matrix from the font's 2x2 transform
+// when bit 0 of [font+0x22] is set, the same gate that turned out to be behind the subtitles, and 0x4DBECE clears
+// that bit on a neighbouring font every frame. So log what the counter's own font [0x6D957C] actually holds at the
+// moment of the draw: the flags, the transform, and the position it was handed.
+static int g_counterTrace = 0;
+
+static void __cdecl LogCounterFont(DWORD font, float x, float y) {
+    if (!g_counterTrace) return;
+    static int logged = 0;
+    if (logged >= 6) return;
+    ++logged;
+    if (!font) { Log("counter text: font pointer is null"); return; }
+    float* m = (float*)(font + 0x10);
+    Log("counter text: font %08lX flags %04X transform %.3f %.3f %.3f %.3f at (%.1f,%.1f), UI scale %.3f, screen %dx%d",
+        font, (unsigned)*(WORD*)(font + 0x22), m[0], m[1], m[2], m[3], x, y,
+        *(float*)0x6AEA00, ScreenW(), ScreenH());
+}
+
+__declspec(naked) static void CounterTextStub() {           // replaces call 0x60B9C0 at 0x4DBF5C
+    __asm {
+        pushad
+        // At entry: [esp] return address, +4 batch, +8 x, +12 y. pushad moves all of that down by 32, so y is at
+        // +0x2C and x at +0x28; after y is pushed the second read is +0x2C again.
+        push dword ptr [esp + 0x2C]                         // y
+        push dword ptr [esp + 0x2C]                         // x
+        push ecx                                            // font (this)
+        call LogCounterFont
+        add esp, 12
+        popad
+        mov eax, 0x60B9C0
+        jmp eax                                             // tail call: 0x60B9C0 returns straight to 0x4DBF61
+    }
+}
+
+static void CounterTraceInstall() {
+    if (!g_counterTrace) return;
+    const BYTE orig[] = { 0xE8, 0x5F, 0xFA, 0x12, 0x00 };   // call 0x60B9C0
+    if (memcmp((BYTE*)0x4DBF5C, orig, sizeof(orig))) {
+        Log("counter text call site differs, trace not installed");
+        return;
+    }
+    DWORD old;
+    VirtualProtect((LPVOID)0x4DBF5C, 5, PAGE_EXECUTE_READWRITE, &old);
+    *(int*)(0x4DBF5C + 1) = (int)((BYTE*)&CounterTextStub - (BYTE*)(0x4DBF5C + 5));
+    VirtualProtect((LPVOID)0x4DBF5C, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), (LPVOID)0x4DBF5C, 5);
+    Log("counter text trace installed (0x4DBF5C)");
+}
+
 // Shell background (ShellBG.xpr, [0x728338]): the shell manager draws it with 0x4CB1A0(dst, src, 1.0) at 0x55DEBA and
 // 0x55DFAC, dst = {0, 0, W+1, H+1} (short x, y, w, h), i.e. stretched. The art is 4:3 and composed with the
 // 640x480 layout, so draw it in the centred 4:3 box and clear the side bars to black.
@@ -227,7 +315,10 @@ static void MenuArtFixInstall() {
         Log("streak line fix installed (0x55B0DD, 0x55B10D, 0x55B119)");
     }
     int bgSites = 0;
+    // The art is 4:3, so filling a wider screen stretches it. Keeping its shape means black bars down the sides;
+    // which of the two is worse is a matter of taste, so it is a setting rather than a decision made here.
     for (DWORD site : { 0x55DEBAul, 0x55DFACul }) {
+        if (!g_menuBgAspect) break;
         BYTE* p = (BYTE*)site;
         if (p[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(p + 1)) != 0x4CB1A0) {
             Log("shell background draw call at 0x%08lX differs, not patched", site);
@@ -240,7 +331,8 @@ static void MenuArtFixInstall() {
         FlushInstructionCache(GetCurrentProcess(), p, 5);
         ++bgSites;
     }
-    Log("shell background 4:3 fix installed (%d of 2 sites)", bgSites);
+    if (g_menuBgAspect) Log("shell background 4:3 fix installed (%d of 2 sites)", bgSites);
+    else Log("menu background left stretched to the screen (MenuBackgroundAspect=0)");
 
     // City map (UI_Map.xpr, [0x6D95E8]): the renders at 0x4D5BAD and 0x4D8460 size and centre the map with
     // sx = W/640, sy = H/480 (call 0x6089F0 = GetScreenW; mulss [0x679944] = 1/640), so it stretches on wide screens.
