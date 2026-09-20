@@ -162,11 +162,19 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
 // starting point. The gate bit is set every time for the same reason.
 // One pass draws with more fonts than is obvious - the street name banner turned out to be the ninth, and a table of
 // eight silently dropped it, which is why that one label stayed wide while the rest of the HUD narrowed.
-// HUDTextAspect: off by default. Narrowing HUD glyphs makes the counter and the hint body match the menus, but the
-// same font carries the button symbols and the street name banner, and those are right as the game draws them - one
-// call, one font, one glyph matrix per line, so nothing here can treat them differently. Until the draw is split per
-// glyph, this is a switch rather than a default.
-static int g_hudTextAspect = 0;
+// HUDTextAspect: narrow the HUD's glyphs by UIPixelAspect, as the scale globals already do for the menus.
+//
+// Not every font in the pass wants it. Logging each draw with the global that holds its font sorts them out, and
+// the answer is a single exception rather than a list: the street name banner is drawn with the font in 0x6D9594
+// and is right as the game draws it, while the hint heading and the location line (0x6D957C), the hint body
+// (0x6D9550 / 0x6D9584) and the rest (0x6D9580) are a quarter too wide without help. Narrowing all of them made the
+// banner squashed; narrowing none left the others stretched. Both reports fit this one exception.
+//
+// The button symbols are still narrowed with the letters around them. They live in the hint body's font, in the
+// same string, drawn by one call with one glyph matrix, so telling them apart needs the draw split per glyph -
+// the symbols are codes 0x80 to 0xA7 and the glyph index is in ecx at 0x60BEAC. Not done here.
+static int g_hudTextAspect = 1;
+static const DWORD kBannerFontSlot = 0x6D9594;   // street name banner: already the right shape
 static const int kMaxHudFonts = 32;
 static DWORD g_hudFonts[kMaxHudFonts] = {};
 static float g_hudFontSaved[kMaxHudFonts] = {};             // the engine's last x, to put back at the end
@@ -192,6 +200,7 @@ static void __cdecl TraceTextFont(DWORD font, float x, float y) {
 
 static void __fastcall NoteHudFont(DWORD font) {
     if (!g_hudTextAspect || !g_inHud || !font || g_uiPixelAspect == 100) return;
+    if (font == *(DWORD*)kBannerFontSlot) return;           // the banner is not stretched; leave it alone
     int i = -1;
     for (int k = 0; k < g_hudFontCount; ++k) if (g_hudFonts[k] == font) { i = k; break; }
     if (i < 0) {
