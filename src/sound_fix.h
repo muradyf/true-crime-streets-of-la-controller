@@ -50,6 +50,31 @@ static void __cdecl TraceVoiceVolume(DWORD caller, DWORD handle, float volume) {
         i, volume, level, mask, v * level, *(int*)0x70CE48, caller - 5);
 }
 
+// ---- which sound is playing
+// 0x5F2C10(voiceHandle, bank, index) starts a sound: it checks the handle against -1, the bank against the count at
+// [0x730708], then takes the 0x1C-byte descriptor at [bank*16 + 0x730508] + index*0x1C. Logging the three tells us
+// which id a voice is carrying, which is what the category trace cannot say on its own - it only sees handles.
+static void __cdecl TraceSoundPlay(DWORD handle, int bank, int index) {
+    if (!g_soundTrace) return;
+    int i = handle & 0xFF;
+    DWORD mask = *(DWORD*)(0x72F908 + i * 4);
+    DWORD table = *(DWORD*)(bank * 16 + 0x730508);
+    DWORD rec = table ? table + index * 0x1C : 0;
+    char desc[128] = "";
+    if (rec && !IsBadReadPtr((void*)rec, 0x1C)) {
+        sprintf_s(desc, "rec %08lX %08lX %08lX %08lX", *(DWORD*)rec, *(DWORD*)(rec + 4),
+                  *(DWORD*)(rec + 8), *(DWORD*)(rec + 0xC));
+        DWORD n = *(DWORD*)rec;                              // if the first field is a name, show it
+        if (n > 0x400000 && !IsBadReadPtr((void*)n, 4)) {
+            char nm[80] = ""; strncpy_s(nm, (const char*)n, 71);
+            bool printable = nm[0] >= 32 && nm[0] < 127;
+            if (printable) sprintf_s(desc, "\"%s\"", nm);
+        }
+    }
+    Log("sound play: voice %3d bank %d id %d, mask 0x%04lX, level %.3f, menu %d, %s",
+        i, bank, index, mask, CategoryLevel(mask), *(int*)0x70CE48, desc);
+}
+
 __declspec(naked) static void SetLevelTraceStub() {         // replaces 0x5F2030: mov edx,[esp+4]; test edx,edx
     __asm {
         pushad
@@ -172,10 +197,20 @@ __declspec(naked) static void BeforePlayStub() {            // replaces 0x661916
     }
 }
 
+// The id trace goes through here rather than taking 0x5F2C10 for itself. It did once, and because the trace is
+// installed first, the start volume fix then found bytes it did not recognise and skipped - which put the loud
+// menu transition back. One address, one stub.
 __declspec(naked) static void StartVoiceStub() {            // replaces 0x5F2C10: mov al,[0x6B9B91]; test al,al
     __asm {
         mov eax, dword ptr [esp + 4]
         mov g_pendingVoiceHandle, eax
+        pushad
+        push dword ptr [esp + 0x2C]                         // index
+        push dword ptr [esp + 0x2C]                         // bank
+        push dword ptr [esp + 0x2C]                         // voice handle
+        call TraceSoundPlay
+        add esp, 12
+        popad
         mov al, byte ptr ds:[0x6B9B91]
         test al, al
         push 0x5F2C17
