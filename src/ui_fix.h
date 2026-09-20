@@ -17,6 +17,7 @@ static int g_uiFix = 1, g_movieFix = 1;
 static int g_menuBgAspect = 1;   // 0 = let the menu background stretch to the full screen, bars and all
 static int g_menuFillWidth = 0;  // 1 = anchor menu items to the real screen edges instead of the centred 4:3 box
 static int g_uiPixelAspect = 100;// horizontal scale as a percent of the vertical one; 80 undoes the port's stretch
+static int g_menuBgHeight = 100; // background height as a percent of the screen, for MenuBackgroundAspect=0
 static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
 static int g_subtitleScalePct = 0;                      // same, for cutscene subtitles; 0 = follow the menu size
 static int g_reticleScale = 0;                          // whole-number aim reticle scale; 0 = follow the HUD size
@@ -236,14 +237,25 @@ static void CounterTraceInstall() {
 // pixel of the art at the cost of bars; cover keeps its proportions and fills the screen at the cost of cropping.
 static void __cdecl AdjustBackgroundRect(short* r) {
     int x = r[0], y = r[1], w = r[2], h = r[3];
-    if (g_menuBgAspect == 2) {                              // cover: full width, height follows the 4:3 art, centred
-        int target = (w * 3 + 2) / 4;
-        if (target <= h) return;                            // screen is already taller than 4:3, nothing to do
+    // Modes 1 and 2 assume the art is 4:3, which is what a 4:3 screen shows. That assumption is not confirmed: the
+    // texture is stored 1024x512 and the shape that actually looks right was found by eye, not derived - see
+    // MenuBackgroundHeight, which is the setting to use for it.
+    const float aspect = 4.0f / 3.0f;
+    if (g_menuBgAspect == 0) {                              // fill the width; MenuBackgroundHeight tunes the height
+        if (g_menuBgHeight == 100) return;
+        int target = h * g_menuBgHeight / 100;
         r[1] = (short)(y + (h - target) / 2);
         r[3] = (short)target;
         return;
     }
-    int target = (h * 4 + 1) / 3;
+    if (g_menuBgAspect == 2) {                              // cover: full width, height follows the art, centred
+        int target = (int)(w / aspect + 0.5f);
+        if (target <= h) return;                            // screen is already taller than the art, nothing to do
+        r[1] = (short)(y + (h - target) / 2);
+        r[3] = (short)target;
+        return;
+    }
+    int target = (int)(h * aspect + 0.5f);
     if (target >= w - 1) return;
     int nx = x + (w - target) / 2;
     r[0] = (short)nx;
@@ -340,7 +352,7 @@ static void MenuArtFixInstall() {
     // The art is 4:3, so filling a wider screen stretches it. Keeping its shape means black bars down the sides;
     // which of the two is worse is a matter of taste, so it is a setting rather than a decision made here.
     for (DWORD site : { 0x55DEBAul, 0x55DFACul }) {
-        if (g_menuBgAspect == 0) break;                  // 0 = leave the game's own stretch in place
+        if (g_menuBgAspect == 0 && g_menuBgHeight == 100) break;   // nothing to change, leave the game alone
         BYTE* p = (BYTE*)site;
         if (p[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(p + 1)) != 0x4CB1A0) {
             Log("shell background draw call at 0x%08lX differs, not patched", site);
@@ -354,6 +366,7 @@ static void MenuArtFixInstall() {
         ++bgSites;
     }
     if (g_menuBgAspect) Log("shell background %s installed (%d of 2 sites)", g_menuBgAspect == 2 ? "cover" : "fit", bgSites);
+    else if (g_menuBgHeight != 100) Log("menu background: full width, height %d%% (%d of 2 sites)", g_menuBgHeight, bgSites);
     else Log("menu background left as the game draws it (MenuBackgroundAspect=0)");
 
     // City map (UI_Map.xpr, [0x6D95E8]): the renders at 0x4D5BAD and 0x4D8460 size and centre the map with
