@@ -106,10 +106,19 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
     if (!vb) return;
     float* p = (float*)vb[0x28 / 4];
     float* end = (float*)batch[0x14 / 4];
-    if (!p || end <= p || (BYTE*)end - (BYTE*)p > 0x10000 * 0x24) return;
+    if (!p || end <= p) return;
     float* from = p;
     for (int i = 0; i < 2; ++i)
         if (batch == kBatchObjects[i] && g_batchPassStart[i] > p && g_batchPassStart[i] <= end) from = g_batchPassStart[i];
+    // The sanity limit belongs on the range actually walked, not on everything the buffer happens to hold. Checking
+    // the whole buffer first made a batch that had already collected more than 0x10000 vertices before the pass fail
+    // the test outright, so nothing in that flush was scaled and the HUD elements it carried stayed at their virtual
+    // size - small enough at 2560x1600 to look missing.
+    if ((BYTE*)end - (BYTE*)from > 0x10000 * 0x24) return;
+    if (cfg.debugLog && from == p && (BYTE*)end - (BYTE*)p > 0x8000 * 0x24) {
+        static int warned = 0;
+        if (warned < 3) { ++warned; Log("HUD flush: %d vertices with no pass start noted", (int)(((BYTE*)end - (BYTE*)p) / 0x24)); }
+    }
     TraceReticleVertices(batch, p, end, from, 0x24);
     // A line one unit thick becomes s pixels, so at a HUD size that is not a whole multiple - 70% of 1600 is 2.333 -
     // the same stroke rasterises to 2 pixels on one side of the reticle and 3 on the other, and no rounding of the
