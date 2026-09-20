@@ -162,6 +162,11 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
 // starting point. The gate bit is set every time for the same reason.
 // One pass draws with more fonts than is obvious - the street name banner turned out to be the ninth, and a table of
 // eight silently dropped it, which is why that one label stayed wide while the rest of the HUD narrowed.
+// HUDTextAspect: off by default. Narrowing HUD glyphs makes the counter and the hint body match the menus, but the
+// same font carries the button symbols and the street name banner, and those are right as the game draws them - one
+// call, one font, one glyph matrix per line, so nothing here can treat them differently. Until the draw is split per
+// glyph, this is a switch rather than a default.
+static int g_hudTextAspect = 0;
 static const int kMaxHudFonts = 32;
 static DWORD g_hudFonts[kMaxHudFonts] = {};
 static float g_hudFontSaved[kMaxHudFonts] = {};             // the engine's last x, to put back at the end
@@ -186,7 +191,7 @@ static void __cdecl TraceTextFont(DWORD font, float x, float y) {
 }
 
 static void __fastcall NoteHudFont(DWORD font) {
-    if (!g_inHud || !font || g_uiPixelAspect == 100) return;
+    if (!g_hudTextAspect || !g_inHud || !font || g_uiPixelAspect == 100) return;
     int i = -1;
     for (int k = 0; k < g_hudFontCount; ++k) if (g_hudFonts[k] == font) { i = k; break; }
     if (i < 0) {
