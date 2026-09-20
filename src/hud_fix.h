@@ -151,26 +151,57 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
 // the same text in a menu. The fonts carry their own 2x2 glyph transform at font+0x10, used by the text draw at
 // 0x60B9C0 when bit 0 of font+0x22 is set - the same one the subtitle fix uses - so narrowing x there reaches the
 // glyphs without touching a single quad. Which fonts the HUD draws with is not fixed, so they are collected as
-// they are used: the draw is hooked, and while the pass is running every font it is handed is recorded, squashed
-// for the rest of the pass and put back at the end.
+// they are used, the draw being hooked to see them.
+//
+// Setting each font once a pass is not enough. The engine writes these fields itself while the pass runs - the
+// objective counter's font is the known case, 0x4DBECE clearing the transform's gate bit on it every frame, which
+// is why that counter needed the bit turned on in the first place - so anything it touches after we do goes out at
+// full width. The counter and the objective line that fades in at the start of the firing range both did.
+// So the narrowing is applied per draw instead, and is idempotent: the value written last time is remembered, and
+// only when the font no longer holds it has the engine been there, in which case whatever it wrote becomes the new
+// starting point. The gate bit is set every time for the same reason.
 static DWORD g_hudFonts[8] = {};
-static float g_hudFontSaved[8][4] = {};
+static float g_hudFontSaved[8][4] = {};                     // what the engine last had, to put back at the end
+static float g_hudFontApplied[8] = {};                      // what we last wrote, to tell our value from theirs
 static WORD g_hudFontFlags[8] = {};
 static int g_hudFontCount = 0;
 
+// Debug: which fonts the text draw is handed, and whether the HUD pass is running at the time. Elements drawn on
+// another layer never see the pass, so the narrowing never reaches them.
+static void __cdecl TraceTextFont(DWORD font, float x, float y) {
+    if (!cfg.debugLog) return;
+    static DWORD seen[48]; static int n = 0;
+    DWORD key = font ^ ((DWORD)g_inHud << 28) ^ ((DWORD)(int)(y / 40.0f) << 20) ^ ((DWORD)(int)(x / 120.0f) << 12);
+    for (int i = 0; i < n; ++i) if (seen[i] == key) return;
+    if (n >= 48) return;
+    seen[n++] = key;
+    float* m = font ? (float*)(font + 0x10) : nullptr;
+    Log("text at (%6.0f,%6.0f) font %08lX inHud %d, globals %.2f/%.2f, transform %.3f %.3f flags %04X",
+        x, y, font, g_inHud, *(float*)0x6AEA00, *(float*)0x6AEA04,
+        m ? m[0] : 0.0f, m ? m[3] : 0.0f, font ? (unsigned)*(WORD*)(font + 0x22) : 0u);
+}
+
 static void __fastcall NoteHudFont(DWORD font) {
     if (!g_inHud || !font || g_uiPixelAspect == 100) return;
-    for (int i = 0; i < g_hudFontCount; ++i) if (g_hudFonts[i] == font) return;
-    if (g_hudFontCount >= 8) return;
-    int i = g_hudFontCount++;
+    int i = -1;
+    for (int k = 0; k < g_hudFontCount; ++k) if (g_hudFonts[k] == font) { i = k; break; }
+    if (i < 0) {
+        if (g_hudFontCount >= 8) return;
+        i = g_hudFontCount++;
+        g_hudFonts[i] = font;
+        g_hudFontFlags[i] = *(WORD*)(font + 0x22);
+        g_hudFontApplied[i] = 0.0f;
+        memcpy(g_hudFontSaved[i], (void*)(font + 0x10), sizeof(g_hudFontSaved[i]));
+    }
     float* m = (float*)(font + 0x10);
-    WORD* flags = (WORD*)(font + 0x22);
-    g_hudFonts[i] = font;
-    memcpy(g_hudFontSaved[i], m, sizeof(g_hudFontSaved[i]));
-    g_hudFontFlags[i] = *flags;
-    m[0] *= g_uiPixelAspect / 100.0f;                       // narrow x, leave y and the shear alone
-    if (m[0] == 0.0f) m[0] = g_uiPixelAspect / 100.0f;
-    *flags |= 1;                                            // 0x60B9C0 ignores the transform unless this is set
+    if (m[0] != g_hudFontApplied[i]) {                      // the engine has written it since we last did
+        memcpy(g_hudFontSaved[i], m, sizeof(g_hudFontSaved[i]));
+        float x = m[0] != 0.0f ? m[0] : 1.0f;               // an untouched font leaves the transform at zero
+        m[0] = x * (g_uiPixelAspect / 100.0f);              // narrow x, leave y and the shear alone
+        if (m[3] == 0.0f) m[3] = 1.0f;
+        g_hudFontApplied[i] = m[0];
+    }
+    *(WORD*)(font + 0x22) |= 1;                             // 0x60B9C0 ignores the transform unless this is set
 }
 
 static void RestoreHudFonts() {
@@ -183,6 +214,13 @@ static void RestoreHudFonts() {
 
 __declspec(naked) static void HudTextStub() {               // replaces the prologue of 0x60B9C0
     __asm {
+        pushad
+        push dword ptr [esp + 0x2C]                         // y
+        push dword ptr [esp + 0x2C]                         // x
+        push ecx                                            // font
+        call TraceTextFont
+        add esp, 12
+        popad
         pushad
         call NoteHudFont                                    // __fastcall: ecx is the font
         popad
