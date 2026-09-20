@@ -355,7 +355,9 @@ static bool ListLayoutInstall() {
 }
 
 // ---- DisplayTrace=1 (debug): log where every label is drawn
-// 0x60B9C0(string, x, y) with the font in ecx is the single text draw, so a burst of its calls is a map of the screen.
+// 0x60B9C0(string, x, y) with the font in ecx is the single text draw, so a burst of its calls is a map of the
+// screen. The HUD font fix takes the same site and installs first, so with it on this logs that the bytes differ
+// and stays out of the way; turn HUDScale's fix off if the trace is needed.
 static int g_textBudget = 0;
 static int g_dispPass = 0;
 static int g_dispDump = 0;
