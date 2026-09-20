@@ -48,6 +48,7 @@ struct Config {
     int invertThrottle = 0;
     int triggersDrive = 0;       // 0 = Xbox layout (right stick accelerate/brake); 1 = R2/L2 analog, fire R1, exit L1
     int cameraSpeed = 100;       // percent of the right stick's full camera speed (lower = slower look/turn)
+    int cameraCurve = 200;       // response exponent x100: 100 = linear, 200 = v*|v| (finer near centre)
     int aimSpeed = 1024;         // precision-aim speed at full stick; the game turns value/1024 degrees per frame (0x519647)
     int buttonPrompts = 1;       // show DualSense button icons in tutorial/help text instead of PC key names
     int debugLog = 0;
@@ -213,9 +214,19 @@ static void MergePad() {
     int moveX = ToByteAxis(p.lx), moveY = ToByteAxis(p.ly);
     // The game's own mouse path (0x5E987D) stores camera X as -mouseX and camera Y (+0x14) so that up is positive.
     // CameraSpeed scales the stick before it is written, so the game's own turn rate is unchanged at 100.
+    //
+    // The axis is written as a signed byte, so the scale decides how many steps are left to aim with: at CameraSpeed
+    // 20 the whole stick maps to 25 of them and the camera moves in visible jumps. CameraCurve buys the fine control
+    // back without spending the range - the stick is shaped first, so a small push stays small while the edge still
+    // reaches full speed, the same trick the free-aim path below uses.
     float camScale = cfg.cameraSpeed / 100.0f;
-    int camX = ToByteAxis((cfg.invertCameraX ? p.rx : -p.rx) * camScale),
-        camY = ToByteAxis((cfg.invertCameraY ? p.ry : -p.ry) * camScale);
+    float camCurve = cfg.cameraCurve / 100.0f;
+    auto shape = [camCurve](float v) {
+        float a = std::fabs(v);
+        return v < 0.0f ? -std::pow(a, camCurve) : std::pow(a, camCurve);
+    };
+    int camX = ToByteAxis(shape(cfg.invertCameraX ? p.rx : -p.rx) * camScale),
+        camY = ToByteAxis(shape(cfg.invertCameraY ? p.ry : -p.ry) * camScale);
 
     // system buttons (all states)
     // Options mirrors the ESC key in every state: pressed sets the back flag, released sets the pause flag. The state
@@ -430,6 +441,9 @@ static void LoadConfig(HMODULE self) {
     g_reticleTrace = (int)GetPrivateProfileIntA("Controller", "ReticleTrace", 0, path);
     g_reticleFix = (int)GetPrivateProfileIntA("Controller", "ReticleFix", 1, path);
     g_reticleScale = (int)GetPrivateProfileIntA("Controller", "ReticleScale", 0, path);
+    cfg.cameraCurve = get("CameraCurve", cfg.cameraCurve);
+    if (cfg.cameraCurve < 100) cfg.cameraCurve = 100;
+    if (cfg.cameraCurve > 400) cfg.cameraCurve = 400;
     g_subtitleTrace = (int)GetPrivateProfileIntA("Controller", "SubtitleTrace", 0, path);
     g_subtitleScalePct = (int)GetPrivateProfileIntA("Controller", "SubtitleScale", 0, path);
     g_logCreateState = g_d3dTrace;

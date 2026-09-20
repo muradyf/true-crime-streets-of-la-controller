@@ -10,6 +10,7 @@ struct ExtrasConfig {
     int rumble = 1;              // forward the game's vibration to the DualSense motors
     int rumbleStrength = 100;    // percent
     int triggerEffects = 1;      // adaptive trigger resistance on R2 when a weapon is out
+    int triggerStrength = 40;    // percent of full resistance force; 0xB0 of 0xFF was the original 69%
     int lightbar = 1;
     int lightR = 0, lightG = 40, lightB = 255;   // police blue
 } xcfg;
@@ -49,6 +50,9 @@ static void ExtrasLoadConfig(const char* iniPath) {
     xcfg.rumble = get("Rumble", xcfg.rumble);
     xcfg.rumbleStrength = get("RumbleStrength", xcfg.rumbleStrength);
     xcfg.triggerEffects = get("TriggerEffects", xcfg.triggerEffects);
+    xcfg.triggerStrength = get("TriggerStrength", xcfg.triggerStrength);
+    if (xcfg.triggerStrength < 0) xcfg.triggerStrength = 0;
+    if (xcfg.triggerStrength > 100) xcfg.triggerStrength = 100;
     xcfg.lightbar = get("Lightbar", xcfg.lightbar);
     xcfg.lightR = get("LightbarRed", xcfg.lightR);
     xcfg.lightG = get("LightbarGreen", xcfg.lightG);
@@ -84,7 +88,7 @@ static void ExtrasUpdate(int state, bool padActive) {
     if (xcfg.lightbar) { o.red = (uint8_t)xcfg.lightR; o.green = (uint8_t)xcfg.lightG; o.blue = (uint8_t)xcfg.lightB; }
     o.playerLeds = 0x04;                                  // centre LED = player 1
     if (xcfg.triggerEffects && (state == 2 /*Gun*/ || state == 5 /*Driver: R2 fires*/ || state == 4 /*Stealth: tranquiliser*/))
-        SetTriggerSection(o.rightTrigger, 0x50, 0xA0, 0xB0);
+        SetTriggerSection(o.rightTrigger, 0x50, 0xA0, (uint8_t)(xcfg.triggerStrength * 255 / 100));
     g_out = o;
     if (o.rightTrigger[0]) ++g_outTriggerOn;
 
