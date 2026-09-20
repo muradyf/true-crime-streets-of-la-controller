@@ -16,6 +16,7 @@
 static int g_uiFix = 1, g_movieFix = 1;
 static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
 static int g_subtitleScalePct = 0;                      // same, for cutscene subtitles; 0 = follow the menu size
+static int g_reticleScale = 0;                          // whole-number aim reticle scale; 0 = follow the HUD size
 static int g_uiLastW = 0, g_uiLastH = 0;
 static int g_uiOffX = 0, g_uiOffY = 0;
 static int g_rectMargins[4] = { 32, 24, 32, 24 };   // left, top, right, bottom as passed to SetSafeRect (last call)

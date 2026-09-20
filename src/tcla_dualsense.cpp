@@ -429,6 +429,7 @@ static void LoadConfig(HMODULE self) {
     g_shaderTrace = (int)GetPrivateProfileIntA("Controller", "ShaderTrace", 0, path);
     g_reticleTrace = (int)GetPrivateProfileIntA("Controller", "ReticleTrace", 0, path);
     g_reticleFix = (int)GetPrivateProfileIntA("Controller", "ReticleFix", 1, path);
+    g_reticleScale = (int)GetPrivateProfileIntA("Controller", "ReticleScale", 0, path);
     g_subtitleTrace = (int)GetPrivateProfileIntA("Controller", "SubtitleTrace", 0, path);
     g_subtitleScalePct = (int)GetPrivateProfileIntA("Controller", "SubtitleScale", 0, path);
     g_logCreateState = g_d3dTrace;

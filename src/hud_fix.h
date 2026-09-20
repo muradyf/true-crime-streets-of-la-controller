@@ -16,6 +16,7 @@
 static int g_hudFix = 1;
 static int g_inHud = 0;
 static float g_hudScale = 1.0f;
+static float g_hudRealW = 0.0f, g_hudRealH = 0.0f;      // the pass's real pixel size, for centring the reticle
 
 struct VirtualUiState {
     bool active = false;
@@ -44,14 +45,20 @@ static void NoteBatchWritePointers() {
 static int g_reticleTrace = 0;
 static int g_reticleLogged = 0;
 
+// [0x6D54F4] packs the three Options sliders in the order the screen stores them, which is red and blue the other way
+// round from the D3DCOLOR the vertices carry (traced: global FF8000 against vertices 0080FF).
+static int g_reticleFix = 1;
+
+static DWORD ReticleColour() {
+    DWORD packed = *(DWORD*)0x6D54F4;
+    return ((packed & 0xFF) << 16) | (packed & 0xFF00) | ((packed >> 16) & 0xFF);
+}
+
 static void TraceReticleVertices(DWORD* batch, float* p, float* end, float* from, DWORD stride) {
     if (!g_reticleTrace || g_reticleLogged > 40) return;
     int count = (int)(((BYTE*)end - (BYTE*)p) / stride);
     if (count <= 0 || count > 20000) return;
-    // [0x6D54F4] packs the three Options sliders in the order the screen stores them, which is red and blue the other
-    // way round from the D3DCOLOR the vertices carry (traced: global FF8000 against vertices 0080FF). Swap them back.
-    DWORD packed = *(DWORD*)0x6D54F4;
-    DWORD want = ((packed & 0xFF) << 16) | (packed & 0xFF00) | ((packed >> 16) & 0xFF);
+    DWORD want = ReticleColour();
     // ReticleTrace=2: select by position instead of colour - the reticle is the only HUD element sitting on the exact
     // centre of the screen, so everything within 30 units of it is its own geometry, whatever colour or vertex layout
     // it uses. Both candidate colour offsets are dumped so the layout can be read off the data rather than assumed.
@@ -104,10 +111,26 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
     for (int i = 0; i < 2; ++i)
         if (batch == kBatchObjects[i] && g_batchPassStart[i] > p && g_batchPassStart[i] <= end) from = g_batchPassStart[i];
     TraceReticleVertices(batch, p, end, from, 0x24);
+    // A line one unit thick becomes s pixels, so at a HUD size that is not a whole multiple - 70% of 1600 is 2.333 -
+    // the same stroke rasterises to 2 pixels on one side of the reticle and 3 on the other, and no rounding of the
+    // positions can fix that. The reticle is drawn from whole numbers about the centre of the screen, so it is given a
+    // whole-number scale of its own and placed on the real centre; the rest of the HUD keeps the chosen size.
     float s = g_hudScale;
+    float sr = g_reticleScale > 0 ? (float)g_reticleScale : floorf(s + 0.5f);
+    if (sr < 1.0f) sr = 1.0f;
+    const DWORD want = ReticleColour();
+    const bool snap = g_reticleFix && sr != s && g_hudRealW > 0.0f;
+    const float vcx = ScreenW() * 0.5f - 0.5f, vcy = ScreenH() * 0.5f - 0.5f;
+    const float rcx = g_hudRealW * 0.5f - 0.5f, rcy = g_hudRealH * 0.5f - 0.5f;
     for (p = from; (BYTE*)p + 0x24 <= (BYTE*)end; p = (float*)((BYTE*)p + 0x24)) {
-        p[0] = (p[0] + 0.5f) * s - 0.5f;
-        p[1] = (p[1] + 0.5f) * s - 0.5f;
+        if (snap && (*(DWORD*)((BYTE*)p + 0x10) & 0x00FFFFFF) == want &&
+            fabsf(p[0] - vcx) < 40.0f && fabsf(p[1] - vcy) < 40.0f) {
+            p[0] = (p[0] - vcx) * sr + rcx;
+            p[1] = (p[1] - vcy) * sr + rcy;
+        } else {
+            p[0] = (p[0] + 0.5f) * s - 0.5f;
+            p[1] = (p[1] + 0.5f) * s - 0.5f;
+        }
     }
 }
 
@@ -162,6 +185,8 @@ static void BeginVirtualUi(VirtualUiState& st, const char* name, float s, bool h
         g_uiOffY = (int)(st.offY / s + 0.5f);
     }
     g_hudScale = s;
+    g_hudRealW = (float)w;
+    g_hudRealH = (float)h;
     NoteBatchWritePointers();
     g_inHud = 1;
 
@@ -227,7 +252,6 @@ static void __fastcall EpisodeScreenRenderHook(void* self, void*, void* batch) {
 // The corner dot is collapsed instead of removed: 0x60A6B0 writes its far edge at x2 - 1, so the empty rect is
 // x2 = x1 + 1, not x2 = x1 - asking for zero gives a backwards quad that still covers a pixel (traced: it moved to
 // 629.5..630.5 instead of disappearing).
-static int g_reticleFix = 1;
 
 static void ReticleFixInstall() {
     if (!g_reticleFix) return;

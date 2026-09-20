@@ -206,9 +206,13 @@ __declspec(naked) static void DisplayOpenHook() {           // thiscall(screen, 
 // Subtitles get their own row because the size that suits a menu is not the size that suits a line of dialogue at
 // the bottom of the screen. Its first step is AUTO, which is SubtitleScale=0: follow the menu size, as before.
 static const int kSizeSteps[] = { 50, 60, 70, 75, 80, 90, 100 };
-static DWORD g_displayItems[10][5];
+static DWORD g_displayItems[11][5];
 static char g_menuSizeText[32] = "MENU SIZE", g_hudSizeText[32] = "HUD SIZE", g_subSizeText[32] = "SUBTITLE SIZE";
-static const DWORD kMenuSizeTextId = 0xD70, kHudSizeTextId = 0xD71, kSubSizeTextId = 0xD74;   // 0xD72/0xD73 are the Controls screen's CAMERA SPEED / AIM SPEED
+static char g_retSizeText[32] = "RETICLE SIZE";
+static const DWORD kMenuSizeTextId = 0xD70, kHudSizeTextId = 0xD71, kSubSizeTextId = 0xD74, kRetSizeTextId = 0xD75;   // 0xD72/0xD73 are the Controls screen's CAMERA SPEED / AIM SPEED
+// The reticle takes whole multiples only: a stroke one unit thick has to land on a whole number of pixels or it
+// rasterises unevenly around the box. AUTO rounds the HUD size to the nearest whole multiple.
+static const int kReticleSteps[] = { 1, 2, 3, 4, 5 };
 
 static void FormatScale(char* out, size_t n, const char* label, int pct) {
     char v[16]; sprintf_s(v, "%.2f", FitScale(pct));
@@ -223,11 +227,14 @@ static void UpdateSizeLabels() {
     FormatScale(g_hudSizeText, sizeof(g_hudSizeText), "HUD SIZE", g_hudScalePct);
     if (g_subtitleScalePct > 0) FormatScale(g_subSizeText, sizeof(g_subSizeText), "SUBTITLE SIZE", g_subtitleScalePct);
     else sprintf_s(g_subSizeText, sizeof(g_subSizeText), "SUBTITLE SIZE AUTO");
+    if (g_reticleScale > 0) sprintf_s(g_retSizeText, sizeof(g_retSizeText), "RETICLE SIZE %dX", g_reticleScale);
+    else sprintf_s(g_retSizeText, sizeof(g_retSizeText), "RETICLE SIZE AUTO");
     char** table = *(char***)0x72831C;
     if (!table) return;
     if (table[kMenuSizeTextId] != g_menuSizeText) table[kMenuSizeTextId] = g_menuSizeText;
     if (table[kHudSizeTextId] != g_hudSizeText) table[kHudSizeTextId] = g_hudSizeText;
     if (table[kSubSizeTextId] != g_subSizeText) table[kSubSizeTextId] = g_subSizeText;
+    if (table[kRetSizeTextId] != g_retSizeText) table[kRetSizeTextId] = g_retSizeText;
 }
 
 static int NextSizeStep(int pct) {
@@ -235,19 +242,30 @@ static int NextSizeStep(int pct) {
     return kSizeSteps[0];
 }
 
-static const char* const kSizeRowName[3] = { "menu size", "HUD size", "subtitle size" };
-static const char* const kSizeRowKey[3]  = { "MenuScale", "HUDScale", "SubtitleScale" };
+static const char* const kSizeRowName[4] = { "menu size", "HUD size", "subtitle size", "reticle size" };
+static const char* const kSizeRowKey[4]  = { "MenuScale", "HUDScale", "SubtitleScale", "ReticleScale" };
 
 static char __fastcall SizeRowCallback(void*, void*, int which, int) {   // called like 0x557DC0 (thiscall, ret 8)
-    int& pct = which == 0 ? g_menuScalePct : which == 1 ? g_hudScalePct : g_subtitleScalePct;
-    // the subtitle row has one step the others do not: 0 = AUTO, back to following the menu size
-    pct = (which == 2 && pct >= kSizeSteps[_countof(kSizeSteps) - 1]) ? 0 : NextSizeStep(pct);
+    int& pct = which == 0 ? g_menuScalePct : which == 1 ? g_hudScalePct :
+               which == 2 ? g_subtitleScalePct : g_reticleScale;
+    // the subtitle and reticle rows have one step the others do not: 0 = AUTO, back to following another size
+    if (which == 3) {
+        int next = 0;
+        for (int v : kReticleSteps) if (v > pct) { next = v; break; }
+        pct = next;
+    } else {
+        pct = (which == 2 && pct >= kSizeSteps[_countof(kSizeSteps) - 1]) ? 0 : NextSizeStep(pct);
+    }
     WriteIniInt("Controller", kSizeRowKey[which], pct, g_modIniPath);
     ApplyUiScale();
     UpdateSizeLabels();
     ((void(__cdecl*)(int, float, float))0x4CA4B0)(0xFF, 1.0f, 1.0f);   // menu confirm sound
-    Log("display: %s %d%% (%.3f at %dx%d)", kSizeRowName[which], pct,
-        FitScale(pct > 0 ? pct : g_menuScalePct), ScreenW(), ScreenH());
+    if (which == 3)
+        Log("display: reticle size %s (HUD %.3f at %dx%d)", pct > 0 ? "fixed" : "AUTO",
+            FitScale(g_hudScalePct), ScreenW(), ScreenH());
+    else
+        Log("display: %s %d%% (%.3f at %dx%d)", kSizeRowName[which], pct,
+            FitScale(pct > 0 ? pct : g_menuScalePct), ScreenW(), ScreenH());
     return 1;
 }
 
@@ -326,6 +344,7 @@ static void DisplayFixInstall() {
     if (g_uiFix)  { const DWORD r[5] = { 1, kMenuSizeTextId, cb, 0, 0 }; memcpy(g_displayItems[count++], r, sizeof(r)); }
     if (g_hudFix) { const DWORD r[5] = { 1, kHudSizeTextId, cb, 1, 0 }; memcpy(g_displayItems[count++], r, sizeof(r)); }
     if (g_uiFix)  { const DWORD r[5] = { 1, kSubSizeTextId, cb, 2, 0 }; memcpy(g_displayItems[count++], r, sizeof(r)); }
+    if (g_hudFix) { const DWORD r[5] = { 1, kRetSizeTextId, cb, 3, 0 }; memcpy(g_displayItems[count++], r, sizeof(r)); }
     DWORD old;
     VirtualProtect((LPVOID)0x6AF690, 8, PAGE_READWRITE, &old);
     *(DWORD*)0x6AF690 = (DWORD)&g_displayItems[0][0];
