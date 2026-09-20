@@ -431,6 +431,7 @@ static void LoadConfig(HMODULE self) {
     g_pauseSave = (int)GetPrivateProfileIntA("Controller", "PauseMenuSave", 1, path);
     g_uiFix = (int)GetPrivateProfileIntA("Controller", "UIScaleFix", 1, path);
     g_movieFix = (int)GetPrivateProfileIntA("Controller", "MovieAspectFix", 1, path);
+    g_menuBgAspect = (int)GetPrivateProfileIntA("Controller", "MenuBackgroundAspect", 1, path);
     g_hudFix = (int)GetPrivateProfileIntA("Controller", "HUDScaleFix", 1, path);
     g_menuScalePct = (int)GetPrivateProfileIntA("Controller", "MenuScale", 90, path);
     g_hudScalePct = (int)GetPrivateProfileIntA("Controller", "HUDScale", 75, path);
@@ -487,6 +488,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         DeviceFixInstall();
         PauseSaveInstall();
         UiFixInstall();
+        ObjectiveCounterFixInstall();
         HudFixInstall();
         ReticleFixInstall();
         ForceWindowedInstall();
