@@ -184,9 +184,128 @@ static bool __cdecl CurrentModeListed() {
     return false;
 }
 
+// ---- the pop-up lists vs the settings rows
+// Opening RESOLUTION drew its entries on top of SUBTITLE SIZE and RETICLE SIZE. Neither the text elements nor the
+// screen object carry coordinates - the layout is resolved at draw time - so the geometry came from hooking the one
+// text draw the UI goes through, 0x60B9C0(string, x, y), and logging where every label landed at 2560x1600 with the
+// menu at scale 2.0 (offset 384,320). In the 640x480 units the UI is laid out in:
+//   settings rows   85 + i*16          (screen 490 + i*32)
+//   pop-up entries  233 + line*16      (screen 788, 820, 852), filling right to left, smallest sizes first
+//   screen title    321                (screen 962)
+// Stock is 7 rows, so the column ended at 181 and the single line of 5 resolutions at 233 cleared it by 52. This mod
+// appends four size rows, taking the column to 245, and lists every mode the adapter reports, which wraps to three
+// lines - so the column runs into the first two of them.
+// The shift is whatever puts the pop-up's first line one row below the last settings row, so it is zero at the
+// stock seven rows and the lists stay exactly where the game put them unless this mod has lengthened the column.
+static bool PatchDword(DWORD site, DWORD expected, DWORD value) {
+    if (*(DWORD*)site != expected) return false;
+    DWORD old;
+    VirtualProtect((LPVOID)site, 4, PAGE_EXECUTE_READWRITE, &old);
+    *(DWORD*)site = value;
+    VirtualProtect((LPVOID)site, 4, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), (LPVOID)site, 4);
+    return true;
+}
+
+static const int kRowTopUnits = 85, kRowPitchUnits = 16, kPopupTopUnits = 233;
+
+static int g_popupShift = 0;
+static DWORD g_dispScreen = 0;   // the Display screen, stashed by DisplayOpenHook
+
+static void PopupShiftInstall(int rows) {
+    int want = kRowTopUnits + rows * kRowPitchUnits;         // one row below the last settings row
+    g_popupShift = want > kPopupTopUnits ? want - kPopupTopUnits : 0;
+    Log("display: pop-up shift %d units for %d settings rows (first line %d, was %d)",
+        g_popupShift, rows, kPopupTopUnits + g_popupShift, kPopupTopUnits);
+}
+
+// The position is only read while the list lays itself out, which happens once when the screen is built - writing
+// the field afterwards changes nothing, as a first attempt from the input update proved. Each of the five lists runs
+// that layout the same way: ecx holds the container, eax its vtable, then "push 0; call [eax+0x2C]" - five bytes,
+// exactly a call, so replacing it with one that nudges the y first needs no trampoline. 233 itself is computed
+// somewhere in the screen's construction rather than stored as a literal, so the nudge is guarded on that value and
+// applies once however often the screen is rebuilt.
+static const DWORD kListLayoutSites[] = { 0x58DDFA, 0x58DFB7, 0x58E149, 0x58E499, 0x58E594 };
+
+static void __fastcall BumpListY(DWORD container) {
+    int* y = (int*)(container + 0x28);
+    if (*y == kPopupTopUnits) *y = kPopupTopUnits + g_popupShift;
+}
+
+__declspec(naked) static void ListLayoutStub() {            // replaces "push 0; call [eax+0x2C]"
+    __asm {
+        pushad
+        call BumpListY                                      // __fastcall: ecx is already the container
+        popad
+        push 0
+        call dword ptr [eax + 0x2C]
+        ret
+    }
+}
+
+static void ListLayoutInstall() {
+    if (!g_popupShift) return;
+    const BYTE orig[] = { 0x6A, 0x00, 0xFF, 0x50, 0x2C };
+    for (DWORD site : kListLayoutSites)
+        if (memcmp((BYTE*)site, orig, sizeof(orig))) {
+            Log("display list layout differs at %08lX, pop-ups not moved", site);
+            return;
+        }
+    for (DWORD site : kListLayoutSites) {
+        DWORD old;
+        VirtualProtect((LPVOID)site, 5, PAGE_EXECUTE_READWRITE, &old);
+        *(BYTE*)site = 0xE8;
+        *(int*)(site + 1) = (int)((BYTE*)&ListLayoutStub - (BYTE*)(site + 5));
+        VirtualProtect((LPVOID)site, 5, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), (LPVOID)site, 5);
+    }
+    Log("display: pop-up lists moved to %d (%d sites)", kPopupTopUnits + g_popupShift,
+        (int)(sizeof(kListLayoutSites) / sizeof(kListLayoutSites[0])));
+}
+
+// ---- DisplayTrace=1 (debug): log where every label is drawn
+// 0x60B9C0(string, x, y) with the font in ecx is the single text draw, so a burst of its calls is a map of the screen.
+static int g_displayTrace = 0;
+static int g_textBudget = 0;
+static int g_dispPass = 0;
+static int g_dispDump = 0;
+
+static void __cdecl LogTextDraw(const char* str, float x, float y) {
+    if (g_textBudget <= 0) return;
+    --g_textBudget;
+    Log("  text (%7.1f,%7.1f)", x, y);
+}
+
+__declspec(naked) static void TextDrawStub() {              // replaces the prologue of 0x60B9C0
+    __asm {
+        pushad
+        push dword ptr [esp + 0x2C]                         // y
+        push dword ptr [esp + 0x2C]                         // x
+        push dword ptr [esp + 0x2C]                         // string
+        call LogTextDraw
+        add esp, 12
+        popad
+        push ebp                                            // the original prologue, then back into the body
+        mov ebp, esp
+        and esp, 0xFFFFFFF0
+        sub esp, 0x354
+        mov eax, 0x60B9CC
+        jmp eax
+    }
+}
+
+static void DisplayDumpElements() {
+    if (!g_dispScreen) return;
+    Log("display trace pass %d: %d resolutions, scale %.3f offset %d,%d, %dx%d",
+        ++g_dispPass, g_resCount, UiScale(), g_uiOffX, g_uiOffY, ScreenW(), ScreenH());
+    g_textBudget = 48;
+}
+
 static DWORD g_displayOpenOrig = 0;
 __declspec(naked) static void DisplayOpenHook() {           // thiscall(screen, arg), ret 4
     __asm {
+        mov g_dispScreen, ecx
+        mov g_dispDump, 120
         push ecx
         call CurrentModeListed
         test al, al
@@ -284,19 +403,10 @@ static char __fastcall SizeRowCallback(void*, void*, int which, int) {   // call
     return 1;
 }
 
-static bool PatchDword(DWORD site, DWORD expected, DWORD value) {
-    if (*(DWORD*)site != expected) return false;
-    DWORD old;
-    VirtualProtect((LPVOID)site, 4, PAGE_EXECUTE_READWRITE, &old);
-    *(DWORD*)site = value;
-    VirtualProtect((LPVOID)site, 4, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), (LPVOID)site, 4);
-    return true;
-}
-
 static void DisplayFixLoadConfig(const char* iniPath) {
     strcpy_s(g_modIniPath, iniPath);
     g_displayFix = (int)GetPrivateProfileIntA("Controller", "DisplayFix", 1, iniPath);
+    g_displayTrace = (int)GetPrivateProfileIntA("Controller", "DisplayTrace", 0, iniPath);
     if (g_displayFix) BuildResTable();                       // after BorderlessDecide (desktop size)
 }
 
@@ -309,6 +419,7 @@ static void DisplayFixUpdate() {                             // every input upda
         Log("display: adapter \"%s\", %d modes enumerated", adapter ? (const char*)(adapter + 0x228) : "?", *(int*)(renderer + 0x20));
     }
     UpdateSizeLabels();
+    if (g_displayTrace && g_dispDump > 0 && --g_dispDump == 0) { DisplayDumpElements(); g_dispDump = 180; }
     if (g_borderlessActive) BorderlessOnDeviceCreated();     // after a runtime switch the device may have been Reset
 }
 
@@ -366,4 +477,13 @@ static void DisplayFixInstall() {
     *(DWORD*)0x6AF694 = (DWORD)count;
     VirtualProtect((LPVOID)0x6AF690, 8, old, &old);
     Log("display menu: added size rows (%d items)", count);
+    PopupShiftInstall(count);
+    ListLayoutInstall();
+    if (g_displayTrace) {
+        const BYTE textOrig[] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0, 0x81, 0xEC, 0x54, 0x03, 0x00, 0x00 };
+        if (memcmp((BYTE*)0x60B9C0, textOrig, sizeof(textOrig)) == 0) {
+            WriteJmp(0x60B9C0, &TextDrawStub, sizeof(textOrig));
+            Log("display trace: text draw hooked (0x60B9C0)");
+        } else Log("display trace: text draw differs, not hooked");
+    }
 }
