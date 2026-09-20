@@ -15,6 +15,7 @@
 
 static int g_uiFix = 1, g_movieFix = 1;
 static int g_menuBgAspect = 1;   // 0 = let the menu background stretch to the full screen, bars and all
+static int g_menuFillWidth = 0;  // 1 = anchor menu items to the real screen edges instead of the centred 4:3 box
 static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
 static int g_subtitleScalePct = 0;                      // same, for cutscene subtitles; 0 = follow the menu size
 static int g_reticleScale = 0;                          // whole-number aim reticle scale; 0 = follow the HUD size
@@ -32,17 +33,23 @@ static float FitScale(int pct) {
 }
 static float UiScale() { return FitScale(g_menuScalePct); }
 
+// MenuFillWidth: the 640x480 layout is 4:3, so on a wider screen it can either keep its shape - centred, with the
+// side margins that leaves - or let its horizontally anchored items reach the real screen edges the way the game
+// originally placed them. Keeping the shape is the default because it lines the right-hand menu items up with the
+// logo and the art, which share the box; filling the width spreads the menu across the whole screen but breaks that
+// alignment, since the logo stays where the 4:3 composition puts it. Vertical placement is untouched either way.
 static void ApplyUiScale() {
     float s = UiScale();
     *(float*)0x6AEA00 = s;
     *(float*)0x6AEA04 = s;
     int w = ScreenW(), h = ScreenH();
     int offX = (int)((w - 640.0f * s) / 2.0f), offY = (int)((h - 480.0f * s) / 2.0f);
-    g_uiOffX = offX > 0 ? offX : 0;
+    g_uiOffX = g_menuFillWidth ? 0 : (offX > 0 ? offX : 0);
     g_uiOffY = offY > 0 ? offY : 0;
     if (g_rectKnown) {
-        *(int*)0x7280F0 = g_uiOffX + (int)(g_rectMargins[0] * s);
-        *(int*)0x7280F4 = w - g_uiOffX - (int)(g_rectMargins[2] * s);
+        int rectOffX = g_menuFillWidth ? 0 : g_uiOffX;
+        *(int*)0x7280F0 = rectOffX + (int)(g_rectMargins[0] * s);
+        *(int*)0x7280F4 = w - rectOffX - (int)(g_rectMargins[2] * s);
         *(int*)0x7280F8 = g_uiOffY + (int)(g_rectMargins[1] * s);
         *(int*)0x7280FC = h - g_uiOffY - (int)(g_rectMargins[3] * s);
     }
