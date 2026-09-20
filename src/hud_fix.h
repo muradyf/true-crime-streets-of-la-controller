@@ -262,6 +262,23 @@ static void __fastcall EpisodeScreenRenderHook(void* self, void*, void* batch) {
 // x2 = x1 + 1, not x2 = x1 - asking for zero gives a backwards quad that still covers a pixel (traced: it moved to
 // 629.5..630.5 instead of disappearing).
 
+// ReticleBox=0: draw the cross on its own, without the box around it. The box is one call, 0x60A830 at 0x4DD416, and
+// its arguments (push 0, push colour, sub esp, 0x10 - 0x18 bytes in all) are popped by the callee, so the call can be
+// replaced outright by the add esp that the callee would have done. The style's other three primitives are untouched.
+static int g_reticleBox = 1;
+
+static void ReticleBoxInstall() {
+    if (g_reticleBox) return;
+    const BYTE orig[] = { 0xE8, 0x15, 0xD4, 0x12, 0x00 };   // call 0x60A830
+    if (memcmp((BYTE*)0x4DD416, orig, sizeof(orig))) {
+        Log("reticle box draw differs, box not removed");
+        return;
+    }
+    const BYTE skip[] = { 0x83, 0xC4, 0x18, 0x90, 0x90 };   // add esp, 0x18 ; nop ; nop
+    PatchBytes(0x4DD416, skip, sizeof(skip));
+    Log("reticle box removed (0x4DD416), cross only");
+}
+
 static void ReticleFixInstall() {
     if (!g_reticleFix) return;
     struct Site { DWORD addr; BYTE orig[3]; BYTE want; const char* what; };

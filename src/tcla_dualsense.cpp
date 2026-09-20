@@ -443,6 +443,7 @@ static void LoadConfig(HMODULE self) {
     g_reticleTrace = (int)GetPrivateProfileIntA("Controller", "ReticleTrace", 0, path);
     g_reticleFix = (int)GetPrivateProfileIntA("Controller", "ReticleFix", 1, path);
     g_reticleScale = (int)GetPrivateProfileIntA("Controller", "ReticleScale", 0, path);
+    g_reticleBox = (int)GetPrivateProfileIntA("Controller", "ReticleBox", 1, path);
     cfg.cameraCurve = get("CameraCurve", cfg.cameraCurve);
     if (cfg.cameraCurve < 100) cfg.cameraCurve = 100;
     if (cfg.cameraCurve > 400) cfg.cameraCurve = 400;
@@ -493,6 +494,7 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         CounterTraceInstall();
         HudFixInstall();
         ReticleFixInstall();
+        ReticleBoxInstall();
         ForceWindowedInstall();
         BorderlessInstall();
         RemapScreenInstall();
