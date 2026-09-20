@@ -43,7 +43,19 @@ def main():
         if os.path.exists(src) and not os.path.exists(os.path.join(shell_bak, name)):
             shutil.copy2(src, os.path.join(shell_bak, name))
 
-    subprocess.check_call([sys.executable, os.path.join(HERE, "patch_font.py"), font_bak, font])
+    # The button symbols have to be drawn against the same UIPixelAspect the mod will narrow them by, or they come
+    # out as ellipses; read it from the installed ini so the two cannot drift apart.
+    aspect = 100
+    ini = os.path.join(game, "scripts", "TrueCrimeDualSense.ini")
+    if os.path.isfile(ini):
+        with open(ini, "r", errors="ignore") as f:
+            for line in f:
+                if line.strip().lower().startswith("uipixelaspect"):
+                    try: aspect = int(line.split("=", 1)[1].split(";")[0].strip())
+                    except ValueError: pass
+    subprocess.check_call([sys.executable, os.path.join(HERE, "patch_font.py"), font_bak, font,
+                           f"--aspect={aspect}"])
+    print(f"button symbols drawn for UIPixelAspect={aspect}")
     subprocess.check_call([sys.executable, os.path.join(HERE, "patch_text.py"), shell_bak, shell])
     print("button prompts installed (originals in scripts\\TrueCrimeDualSense-originals)")
     return 0

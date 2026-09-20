@@ -10,12 +10,24 @@ Icon glyph codes (Xbox leftovers, confirmed by rendering the atlas):
   0x80 A  0x81 Y  0x82 B  0x83 X  0xA2 left trigger  0xA5 right trigger  0xA3/0xA4 sticks  0xA6 white  0xA7 black
 Unused in every language file: 0x98-0x9B (30-31 px wide) -> used for the wider L1/R1/L2/R2 labels.
 
-usage: patch_font.py <original.fnt> <patched.fnt> [preview.png]
+The icons are drawn short rather than square. UIPixelAspect narrows every glyph horizontally to undo the port's
+stretch, which is right for letters but turns a round button symbol into an upright ellipse - the symbols live in
+the same font, in the same string, drawn by one call with one glyph matrix, so nothing downstream can tell them
+apart. They can be compensated here instead: drawn at the aspect's reciprocal height, they come out round once the
+engine has narrowed them. The cell is already as wide as the disc, so it is the height that gives.
+
+usage: patch_font.py <original.fnt> <patched.fnt> [preview.png] [--aspect N]
+       --aspect is UIPixelAspect as a percent, 100 (the default) drawing the symbols square
 """
 import struct, sys, zlib, math
 
-src, dst = sys.argv[1], sys.argv[2]
-preview = sys.argv[3] if len(sys.argv) > 3 else None
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+src, dst = args[0], args[1]
+preview = args[2] if len(args) > 2 else None
+ASPECT = 1.0
+for a in sys.argv[1:]:
+    if a.startswith("--aspect"):
+        ASPECT = max(50, min(100, int(a.split("=", 1)[1]))) / 100.0
 d = bytearray(open(src, "rb").read())
 toff = struct.unpack_from("<I", d, 4)[0]
 count, first, cellh = d[0x14], d[0x15], d[0x16]
@@ -38,13 +50,18 @@ def clear(x0, y0, w, h):
             put(x, y, 0, 0, 0, 0)
 
 def blend(layers, x0, y0, w, h, ss=4):
-    """layers: list of (coverage_fn(px,py)->bool, (r,g,b)) painted in order; supersampled coverage -> 4-bit alpha."""
+    """layers: list of (coverage_fn(px,py)->bool, (r,g,b)) painted in order; supersampled coverage -> 4-bit alpha.
+
+    Coverage is sampled over a taller span than the rows it fills, about the cell's middle, so every symbol comes
+    out ASPECT as tall as it was drawn - see the note at the top. The shapes themselves are written square."""
+    mid = h / 2.0
     for y in range(h):
         for x in range(w):
             acc_a = 0.0; acc = [0.0, 0.0, 0.0]
             for sy in range(ss):
                 for sx in range(ss):
                     px, py = x + (sx + 0.5) / ss, y + (sy + 0.5) / ss
+                    py = mid + (py - mid) / ASPECT
                     col = None
                     for fn, c in layers:
                         if fn(px, py): col = c
