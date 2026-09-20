@@ -224,10 +224,19 @@ static void CounterTraceInstall() {
 }
 
 // Shell background (ShellBG.xpr, [0x728338]): the shell manager draws it with 0x4CB1A0(dst, src, 1.0) at 0x55DEBA and
-// 0x55DFAC, dst = {0, 0, W+1, H+1} (short x, y, w, h), i.e. stretched. The art is 4:3 and composed with the
-// 640x480 layout, so draw it in the centred 4:3 box and clear the side bars to black.
+// 0x55DFAC, dst = {0, 0, W+1, H+1} (short x, y, w, h), i.e. stretched to whatever shape the screen is. The art is 4:3.
+// MenuBackgroundAspect: 1 fits it inside the screen and blacks out the side bars, 2 fills the screen by scaling it up
+// until it covers and letting the top and bottom fall outside, 0 leaves the game's stretch alone. Fit keeps every
+// pixel of the art at the cost of bars; cover keeps its proportions and fills the screen at the cost of cropping.
 static void __cdecl AdjustBackgroundRect(short* r) {
     int x = r[0], y = r[1], w = r[2], h = r[3];
+    if (g_menuBgAspect == 2) {                              // cover: full width, height follows the 4:3 art, centred
+        int target = (w * 3 + 2) / 4;
+        if (target <= h) return;                            // screen is already taller than 4:3, nothing to do
+        r[1] = (short)(y + (h - target) / 2);
+        r[3] = (short)target;
+        return;
+    }
     int target = (h * 4 + 1) / 3;
     if (target >= w - 1) return;
     int nx = x + (w - target) / 2;
@@ -325,7 +334,7 @@ static void MenuArtFixInstall() {
     // The art is 4:3, so filling a wider screen stretches it. Keeping its shape means black bars down the sides;
     // which of the two is worse is a matter of taste, so it is a setting rather than a decision made here.
     for (DWORD site : { 0x55DEBAul, 0x55DFACul }) {
-        if (!g_menuBgAspect) break;
+        if (g_menuBgAspect == 0) break;                  // 0 = leave the game's own stretch in place
         BYTE* p = (BYTE*)site;
         if (p[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(p + 1)) != 0x4CB1A0) {
             Log("shell background draw call at 0x%08lX differs, not patched", site);
@@ -338,7 +347,7 @@ static void MenuArtFixInstall() {
         FlushInstructionCache(GetCurrentProcess(), p, 5);
         ++bgSites;
     }
-    if (g_menuBgAspect) Log("shell background 4:3 fix installed (%d of 2 sites)", bgSites);
+    if (g_menuBgAspect) Log("shell background %s installed (%d of 2 sites)", g_menuBgAspect == 2 ? "cover" : "4:3 fit", bgSites);
     else Log("menu background left stretched to the screen (MenuBackgroundAspect=0)");
 
     // City map (UI_Map.xpr, [0x6D95E8]): the renders at 0x4D5BAD and 0x4D8460 size and centre the map with
