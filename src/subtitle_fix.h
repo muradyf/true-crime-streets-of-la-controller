@@ -3,8 +3,11 @@
 // Subtitles are queued by 0x4AEB10 and drawn by the element callback 0x490A80, which calls the text routine 0x60B9C0
 // through the subtitle font [0x6D9560], whose glyph scale is 1.0, so at high resolutions the text stays at its
 // 640x480 size. Scaling it needs three patches that agree with each other:
-//   - draw scale: the glyph size comes from the subtitle font object's 2x2 transform [font + 0x10] (identity 1 0 0 1), which
-//     0x60B9C0 multiplies into every glyph; it is set to the subtitle scale;
+//   - draw scale: the glyph size comes from the subtitle font object's 2x2 transform [font + 0x10] (identity 1 0 0 1),
+//     which 0x60B9C0 multiplies into every glyph; it is set to the subtitle scale. 0x60B9C0 only reads that transform
+//     when bit 0 of the font's flags [font + 0x22] is set (test cl,1 at 0x60B9E8; without it the whole matrix block
+//     is skipped by the jump at 0x60BA36) and on the subtitle font it is clear, so the bit is set here too. Writing
+//     the transform on its own changed the line breaks and the rise, which are computed here, but never the glyphs;
 //   - rise: the layout (0x490A21) places the text block's bottom on the element's y and moves up by
 //     font line height * lines at 1x, so that height is multiplied by the scale too;
 //   - wrap width: 0x4AEB10 sizes the element W/640 * 512 (mulss [0x67AEC4] at 0x4AEB6A, a shared constant), and
@@ -47,6 +50,11 @@ static void SubtitleFixUpdate() {                           // follows the resol
     }
     m[0] = s; m[1] = 0.0f;
     m[2] = 0.0f; m[3] = s;
+    WORD* flags = (WORD*)(font + 0x22);                     // 0x60B9C0 ignores the transform unless bit 0 is set
+    if (!(*flags & 1)) {
+        *flags |= 1;
+        Log("subtitles: font flags %04X had the transform bit clear, set it", (unsigned)*flags);
+    }
     g_subScale = s;
     g_subWrapWidth = 512.0f / s;
     g_subWrittenScale = s;
