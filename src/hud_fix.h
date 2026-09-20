@@ -233,6 +233,26 @@ static void RestoreHudFonts() {
     g_hudFontCount = 0;
 }
 
+// ---- the button symbols: where the quad is actually built (findings, no code)
+// The symbols are glyphs of the same font as the letters around them, codes 0x80 to 0xA7, and the text draw builds
+// one glyph matrix per call, so nothing above the glyph level can separate them. Two attempts failed before the
+// right seam was found, and both are worth recording so they are not tried again:
+//   - [esp+0x1C0] holds the font's x scale and is re-read per glyph, so writing it per glyph looked correct in a
+//     trace. It changes nothing on screen: measured, the symbol stayed at w/h 0.812, exactly the narrowing.
+//   - writing every frame slot that held the letter scale garbles the text and drops glyphs; those slots are the
+//     loop's intermediates, rewritten before they are read.
+// What actually places the pixels is 0x60A2C0, a per-vertex writer rather than a quad emitter: ecx is the batch,
+// [ecx+0x14] the vertex about to be filled, the pushed argument a vec4 whose first lane is that vertex's x, and the
+// two floats its texture coordinates. The text draw calls it once per corner from 0x60C134, 0x60C2DE, 0x60C482 and
+// 0x60C5F1, and esi still holds the glyph's record at each - so the glyph is identifiable that far down, its index
+// being (esi - [font+0x28] - 0x18) / 8 with 0x20 as the first character.
+// Logged corners for one glyph: (1206,718) (1222,718) (1206,793) (1222,793), so a glyph is a 16x75 quad here, but
+// the order is not the same for every glyph - a rule built on "the first corner is the left edge" never fired for
+// the symbols on the controls screen. Widening one means collecting its vertices and adjusting them together once
+// the glyph is complete, from its own leftmost corner.
+// That was written and builds, but the menus could not be reached often enough to measure it, and unverified code
+// that writes into vertex memory is not worth leaving in. It is in the history if it is wanted.
+
 __declspec(naked) static void HudTextStub() {               // replaces the prologue of 0x60B9C0
     __asm {
         pushad
