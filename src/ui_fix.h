@@ -14,7 +14,6 @@
 #pragma once
 
 static int g_uiFix = 1, g_movieFix = 1;
-static int g_menuBgAspect = 1;   // 0 = let the menu background stretch to the full screen, bars and all
 static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
 static int g_subtitleScalePct = 0;                      // same, for cutscene subtitles; 0 = follow the menu size
 static int g_reticleScale = 0;                          // whole-number aim reticle scale; 0 = follow the HUD size
@@ -129,36 +128,6 @@ __declspec(naked) static void StreakYStub() {               // replaces 0x55B10D
     }
 }
 
-// Mission objective counter ("0/10", top right of the HUD, 0x4DBEE0). It formats the pair with 0x67C0F8, then takes
-// its x from GetScreenW() - 8 and hands that to the x anchor helper 0x4CB6D0, which multiplies whatever it is given
-// by the UI scale [0x6AEA00] (mulss at 0x4CB6E4). The value is already an absolute screen coordinate, so vanilla got
-// away with it only because that scale is always 1.0; UIScaleFix makes it real and 2552 becomes 5104, well past the
-// right edge, and the counter disappears. It is drawn outside the a == 4 pass, so the HUD pass never covers it.
-//
-// Give the helper a coordinate in the space it expects by dividing the screen width by the scale first. The 8 pixel
-// margin then scales with the text, and inside the HUD pass, where the scale is 1.0, this is a no-op.
-static int __cdecl ObjectiveCounterScreenW() {
-    float s = *(float*)0x6AEA00;
-    int w = ScreenW();
-    if (s <= 0.0f) return w;
-    return (int)(w / s + 0.5f);
-}
-
-static void ObjectiveCounterFixInstall() {
-    if (!g_uiFix) return;
-    const BYTE orig[] = { 0xE8, 0xED, 0xCA, 0x12, 0x00, 0x83, 0xE8, 0x08 };   // call 0x6089F0 ; sub eax, 8
-    if (memcmp((BYTE*)0x4DBEFE, orig, sizeof(orig))) {
-        Log("objective counter site differs, not patched");
-        return;
-    }
-    DWORD old;
-    VirtualProtect((LPVOID)0x4DBEFE, 5, PAGE_EXECUTE_READWRITE, &old);
-    *(int*)(0x4DBEFE + 1) = (int)((BYTE*)&ObjectiveCounterScreenW - (BYTE*)(0x4DBEFE + 5));
-    VirtualProtect((LPVOID)0x4DBEFE, 5, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), (LPVOID)0x4DBEFE, 5);
-    Log("objective counter fix installed (0x4DBEFE)");
-}
-
 // Shell background (ShellBG.xpr, [0x728338]): the shell manager draws it with 0x4CB1A0(dst, src, 1.0) at 0x55DEBA and
 // 0x55DFAC, dst = {0, 0, W+1, H+1} (short x, y, w, h), i.e. stretched. The art is 4:3 and composed with the
 // 640x480 layout, so draw it in the centred 4:3 box and clear the side bars to black.
@@ -258,10 +227,7 @@ static void MenuArtFixInstall() {
         Log("streak line fix installed (0x55B0DD, 0x55B10D, 0x55B119)");
     }
     int bgSites = 0;
-    // The art is 4:3, so filling a wider screen stretches it. Keeping its shape means black bars down the sides;
-    // which of the two is worse is a matter of taste, so it is a setting rather than a decision made here.
     for (DWORD site : { 0x55DEBAul, 0x55DFACul }) {
-        if (!g_menuBgAspect) break;
         BYTE* p = (BYTE*)site;
         if (p[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(p + 1)) != 0x4CB1A0) {
             Log("shell background draw call at 0x%08lX differs, not patched", site);
@@ -274,8 +240,7 @@ static void MenuArtFixInstall() {
         FlushInstructionCache(GetCurrentProcess(), p, 5);
         ++bgSites;
     }
-    if (g_menuBgAspect) Log("shell background 4:3 fix installed (%d of 2 sites)", bgSites);
-    else Log("menu background left stretched to the screen (MenuBackgroundAspect=0)");
+    Log("shell background 4:3 fix installed (%d of 2 sites)", bgSites);
 
     // City map (UI_Map.xpr, [0x6D95E8]): the renders at 0x4D5BAD and 0x4D8460 size and centre the map with
     // sx = W/640, sy = H/480 (call 0x6089F0 = GetScreenW; mulss [0x679944] = 1/640), so it stretches on wide screens.
