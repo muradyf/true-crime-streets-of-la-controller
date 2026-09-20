@@ -160,20 +160,24 @@ static void __cdecl ScaleHudBatch(DWORD* batch) {
 // So the narrowing is applied per draw instead, and is idempotent: the value written last time is remembered, and
 // only when the font no longer holds it has the engine been there, in which case whatever it wrote becomes the new
 // starting point. The gate bit is set every time for the same reason.
-static DWORD g_hudFonts[8] = {};
-static float g_hudFontSaved[8][4] = {};                     // what the engine last had, to put back at the end
-static float g_hudFontApplied[8] = {};                      // what we last wrote, to tell our value from theirs
-static WORD g_hudFontFlags[8] = {};
+// One pass draws with more fonts than is obvious - the street name banner turned out to be the ninth, and a table of
+// eight silently dropped it, which is why that one label stayed wide while the rest of the HUD narrowed.
+static const int kMaxHudFonts = 32;
+static DWORD g_hudFonts[kMaxHudFonts] = {};
+static float g_hudFontSaved[kMaxHudFonts] = {};             // the engine's last x, to put back at the end
+static float g_hudFontApplied[kMaxHudFonts] = {};           // what we last wrote, to tell our value from theirs
+static bool g_hudFontHadBit[kMaxHudFonts] = {};             // whether the gate bit was already set when we arrived
 static int g_hudFontCount = 0;
 
 // Debug: which fonts the text draw is handed, and whether the HUD pass is running at the time. Elements drawn on
 // another layer never see the pass, so the narrowing never reaches them.
 static void __cdecl TraceTextFont(DWORD font, float x, float y) {
     if (!cfg.debugLog) return;
-    static DWORD seen[48]; static int n = 0;
+    if (!g_inHud && y > 250.0f) return;                     // the menus would fill the table before play starts
+    static DWORD seen[160]; static int n = 0;
     DWORD key = font ^ ((DWORD)g_inHud << 28) ^ ((DWORD)(int)(y / 40.0f) << 20) ^ ((DWORD)(int)(x / 120.0f) << 12);
     for (int i = 0; i < n; ++i) if (seen[i] == key) return;
-    if (n >= 48) return;
+    if (n >= 160) return;
     seen[n++] = key;
     float* m = font ? (float*)(font + 0x10) : nullptr;
     Log("text at (%6.0f,%6.0f) font %08lX inHud %d, globals %.2f/%.2f, transform %.3f %.3f flags %04X",
@@ -186,28 +190,31 @@ static void __fastcall NoteHudFont(DWORD font) {
     int i = -1;
     for (int k = 0; k < g_hudFontCount; ++k) if (g_hudFonts[k] == font) { i = k; break; }
     if (i < 0) {
-        if (g_hudFontCount >= 8) return;
+        if (g_hudFontCount >= kMaxHudFonts) return;
         i = g_hudFontCount++;
         g_hudFonts[i] = font;
-        g_hudFontFlags[i] = *(WORD*)(font + 0x22);
+        g_hudFontHadBit[i] = (*(WORD*)(font + 0x22) & 1) != 0;
         g_hudFontApplied[i] = 0.0f;
-        memcpy(g_hudFontSaved[i], (void*)(font + 0x10), sizeof(g_hudFontSaved[i]));
+        g_hudFontSaved[i] = *(float*)(font + 0x10);
     }
     float* m = (float*)(font + 0x10);
     if (m[0] != g_hudFontApplied[i]) {                      // the engine has written it since we last did
-        memcpy(g_hudFontSaved[i], m, sizeof(g_hudFontSaved[i]));
+        g_hudFontSaved[i] = m[0];
         float x = m[0] != 0.0f ? m[0] : 1.0f;               // an untouched font leaves the transform at zero
         m[0] = x * (g_uiPixelAspect / 100.0f);              // narrow x, leave y and the shear alone
-        if (m[3] == 0.0f) m[3] = 1.0f;
         g_hudFontApplied[i] = m[0];
     }
     *(WORD*)(font + 0x22) |= 1;                             // 0x60B9C0 ignores the transform unless this is set
 }
 
+// Put back only what was changed - the x scale and, if it was clear, the gate bit. Writing the whole flags word and
+// the whole transform back is what made the main menu come up in small caps after a game had been loaded: the fonts
+// are shared with the menus, the engine keeps other bits of that word for itself (the trace shows 000F, 0007, 0005,
+// 001D on one font), and restoring the value captured at the start of the pass reverted its own later changes.
 static void RestoreHudFonts() {
     for (int i = 0; i < g_hudFontCount; ++i) {
-        memcpy((void*)(g_hudFonts[i] + 0x10), g_hudFontSaved[i], sizeof(g_hudFontSaved[i]));
-        *(WORD*)(g_hudFonts[i] + 0x22) = g_hudFontFlags[i];
+        *(float*)(g_hudFonts[i] + 0x10) = g_hudFontSaved[i];
+        if (!g_hudFontHadBit[i]) *(WORD*)(g_hudFonts[i] + 0x22) &= ~1;
     }
     g_hudFontCount = 0;
 }
