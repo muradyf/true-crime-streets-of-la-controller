@@ -17,7 +17,7 @@ static int g_uiFix = 1, g_movieFix = 1;
 static int g_menuBgAspect = 1;   // 0 = let the menu background stretch to the full screen, bars and all
 static int g_menuFillWidth = 0;  // 1 = anchor menu items to the real screen edges instead of the centred 4:3 box
 static int g_uiPixelAspect = 100;// horizontal scale as a percent of the vertical one; 80 undoes the port's stretch
-static int g_menuBgHeight = 100; // background height as a percent of the screen, for MenuBackgroundAspect=0
+static int g_menuBgShape = 0;    // menu background aspect x100 (170 = 1.70); 0 = leave the game's own stretch
 static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
 static int g_subtitleScalePct = 0;                      // same, for cutscene subtitles; 0 = follow the menu size
 static int g_reticleScale = 0;                          // whole-number aim reticle scale; 0 = follow the HUD size
@@ -241,11 +241,23 @@ static void __cdecl AdjustBackgroundRect(short* r) {
     // texture is stored 1024x512 and the shape that actually looks right was found by eye, not derived - see
     // MenuBackgroundHeight, which is the setting to use for it.
     const float aspect = 4.0f / 3.0f;
-    if (g_menuBgAspect == 0) {                              // fill the width; MenuBackgroundHeight tunes the height
-        if (g_menuBgHeight == 100) return;
-        int target = h * g_menuBgHeight / 100;
-        r[1] = (short)(y + (h - target) / 2);
-        r[3] = (short)target;
+    // MenuBackgroundShape is the aspect the art is meant to be drawn at, so it describes the picture rather than the
+    // screen and holds whatever the screen happens to be. The art is scaled uniformly - never stretched - about the
+    // centre until it covers the screen, and whichever axis overflows is cropped. That is the same arithmetic on a
+    // 4:3 monitor and on an ultrawide, so a single value works everywhere.
+    if (g_menuBgAspect == 0) {
+        if (g_menuBgShape <= 0 || w <= 0 || h <= 0) return;
+        float want = g_menuBgShape / 100.0f;
+        float screen = (float)w / (float)h;
+        if (screen > want) {                                // screen is wider: fill the width, overflow vertically
+            int target = (int)(w / want + 0.5f);
+            r[1] = (short)(y + (h - target) / 2);
+            r[3] = (short)target;
+        } else {                                            // screen is taller: fill the height, overflow sideways
+            int target = (int)(h * want + 0.5f);
+            r[0] = (short)(x + (w - target) / 2);
+            r[2] = (short)target;
+        }
         return;
     }
     if (g_menuBgAspect == 2) {                              // cover: full width, height follows the art, centred
@@ -352,7 +364,7 @@ static void MenuArtFixInstall() {
     // The art is 4:3, so filling a wider screen stretches it. Keeping its shape means black bars down the sides;
     // which of the two is worse is a matter of taste, so it is a setting rather than a decision made here.
     for (DWORD site : { 0x55DEBAul, 0x55DFACul }) {
-        if (g_menuBgAspect == 0 && g_menuBgHeight == 100) break;   // nothing to change, leave the game alone
+        if (g_menuBgAspect == 0 && g_menuBgShape <= 0) break;      // nothing to change, leave the game alone
         BYTE* p = (BYTE*)site;
         if (p[0] != 0xE8 || (DWORD)(site + 5 + *(int*)(p + 1)) != 0x4CB1A0) {
             Log("shell background draw call at 0x%08lX differs, not patched", site);
@@ -366,7 +378,7 @@ static void MenuArtFixInstall() {
         ++bgSites;
     }
     if (g_menuBgAspect) Log("shell background %s installed (%d of 2 sites)", g_menuBgAspect == 2 ? "cover" : "fit", bgSites);
-    else if (g_menuBgHeight != 100) Log("menu background: full width, height %d%% (%d of 2 sites)", g_menuBgHeight, bgSites);
+    else if (g_menuBgShape > 0) Log("menu background: aspect %.2f, scaled to cover (%d of 2 sites)", g_menuBgShape / 100.0f, bgSites);
     else Log("menu background left as the game draws it (MenuBackgroundAspect=0)");
 
     // City map (UI_Map.xpr, [0x6D95E8]): the renders at 0x4D5BAD and 0x4D8460 size and centre the map with
