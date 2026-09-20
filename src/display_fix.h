@@ -185,18 +185,21 @@ static bool __cdecl CurrentModeListed() {
 }
 
 // ---- the pop-up lists vs the settings rows
-// Opening RESOLUTION drew its entries on top of SUBTITLE SIZE and RETICLE SIZE. Neither the text elements nor the
+// Opening RESOLUTION drew its entries across SUBTITLE SIZE and RETICLE SIZE. Neither the text elements nor the
 // screen object carry coordinates - the layout is resolved at draw time - so the geometry came from hooking the one
-// text draw the UI goes through, 0x60B9C0(string, x, y), and logging where every label landed at 2560x1600 with the
-// menu at scale 2.0 (offset 384,320). In the 640x480 units the UI is laid out in:
-//   settings rows   85 + i*16          (screen 490 + i*32)
+// text draw the whole UI goes through, 0x60B9C0(string, x, y), and logging where every label landed at 2560x1600
+// with the menu at scale 2.0 (offset 384,320). In the 640x480 units the UI is laid out in:
+//   settings rows   85 + i*16          (screen 490 + i*32), ending at 254 across for the longest label
 //   pop-up entries  233 + line*16      (screen 788, 820, 852), filling right to left, smallest sizes first
 //   screen title    321                (screen 962)
-// Stock is 7 rows, so the column ended at 181 and the single line of 5 resolutions at 233 cleared it by 52. This mod
-// appends four size rows, taking the column to 245, and lists every mode the adapter reports, which wraps to three
-// lines - so the column runs into the first two of them.
-// The shift is whatever puts the pop-up's first line one row below the last settings row, so it is zero at the
-// stock seven rows and the lists stay exactly where the game put them unless this mod has lengthened the column.
+// Stock is 7 rows ending at 181, and 5 resolutions fit one line, so nothing met. This mod appends four size rows,
+// taking the column to 245, and lists every mode the adapter reports, which wraps - and the entries run leftwards
+// until they reach the safe rect, which MenuSpread widens to most of the screen, so they cross the column.
+// The wrap is decided in the list's own layout (0x55D330): 0x55D482 loads the safe rect's left edge as the limit a
+// line may reach, and the entries break the moment the next one would pass it. ebx still holds the container there,
+// so replacing that load with a call that answers per container gives the Display screen's own five lists a limit
+// just right of the settings column while every other list in the game keeps the rect's edge. The entries then sit
+// beside the settings instead of under them, and can stay at the y the game chose.
 static bool PatchDword(DWORD site, DWORD expected, DWORD value) {
     if (*(DWORD*)site != expected) return false;
     DWORD old;
@@ -207,16 +210,24 @@ static bool PatchDword(DWORD site, DWORD expected, DWORD value) {
     return true;
 }
 
+static int g_displayTrace = 0;
 static const int kRowTopUnits = 85, kRowPitchUnits = 16, kPopupTopUnits = 233;
+// Where the settings column ends: its text starts at 57 units and the longest label it can show,
+// "SUBTITLE SIZE 1.25X", runs to about 254, measured from the text draws at 2560x1600. In layout units, so it holds
+// at any resolution, menu size or spread - a fraction of the screen or of the safe rect would not.
+static const int kColumnRightUnits = 270;
 
 static int g_popupShift = 0;
 static DWORD g_dispScreen = 0;   // the Display screen, stashed by DisplayOpenHook
 
-static void PopupShiftInstall(int rows) {
+// With the lists held to the right of the column they can stay where the game puts them, side by side with the
+// settings. The downward shift is only the fallback for when the line limit could not be hooked, and then it has to
+// put the first line below the last settings row instead.
+static void PopupShiftInstall(int rows, bool limitHooked) {
     int want = kRowTopUnits + rows * kRowPitchUnits;         // one row below the last settings row
-    g_popupShift = want > kPopupTopUnits ? want - kPopupTopUnits : 0;
-    Log("display: pop-up shift %d units for %d settings rows (first line %d, was %d)",
-        g_popupShift, rows, kPopupTopUnits + g_popupShift, kPopupTopUnits);
+    g_popupShift = limitHooked || want <= kPopupTopUnits ? 0 : want - kPopupTopUnits;
+    Log("display: pop-up first line %d (%d settings rows, line limit %s)",
+        kPopupTopUnits + g_popupShift, rows, limitHooked ? "hooked" : "not hooked");
 }
 
 // The position is only read while the list lays itself out, which happens once when the screen is built - writing
@@ -227,15 +238,56 @@ static void PopupShiftInstall(int rows) {
 // applies once however often the screen is rebuilt.
 static const DWORD kListLayoutSites[] = { 0x58DDFA, 0x58DFB7, 0x58E149, 0x58E499, 0x58E594 };
 
-static void __fastcall BumpListY(DWORD container) {
+// The same layout (0x55D330) decides where to break a line: it takes the safe rect's left edge as the limit a line
+// may reach (0x55D482) and wraps the moment the next entry would pass it. The entries are right anchored and fill
+// leftwards, so with the rect spanning the whole screen - which is what MenuSpread widens it to - a long list runs
+// left until it is under the settings column. Reading that limit from here instead lets these five lists stop at the
+// middle of the rect, leaving the settings the left half and the entries the right, while every other list in the
+// game still gets the rect's own edge.
+// A list is laid out again after it is built - opening the screen refreshes it - so the limit cannot be set around
+// the five construction calls; it has to be decided inside the layout. At 0x55D482 ebx still holds the container, so
+// the load becomes a call that answers for that container: the middle of the rect for the Display screen's own five,
+// the rect's edge for every other list in the game. eax is live across the site, hence pushad.
+static DWORD g_dispLists[5] = {};
+static int g_listLimitOut = 0;
+
+static void __fastcall ListLimitFor(DWORD container) {
+    g_listLimitOut = *(int*)0x7280F0;
+    for (DWORD c : g_dispLists)
+        if (c && c == container) {
+            g_listLimitOut = g_uiOffX + (int)(kColumnRightUnits * *(float*)0x6AEA00);
+            return;
+        }
+}
+
+__declspec(naked) static void ListLimitStub() {             // replaces "mov ecx, [0x7280F0]" at 0x55D482
+    __asm {
+        pushad
+        mov ecx, ebx                                        // the container being laid out
+        call ListLimitFor
+        popad
+        mov ecx, g_listLimitOut
+        ret
+    }
+}
+
+static void __fastcall BeforeListLayout(DWORD container) {
     int* y = (int*)(container + 0x28);
     if (*y == kPopupTopUnits) *y = kPopupTopUnits + g_popupShift;
+    int slot = -1;
+    for (int i = 0; i < 5; ++i) {
+        if (g_dispLists[i] == container) { slot = i; break; }
+        if (!g_dispLists[i] && slot < 0) slot = i;
+    }
+    if (slot >= 0) g_dispLists[slot] = container;
+    if (g_displayTrace)
+        Log("display: list %08lX y %d, rect %d..%d", container, *y, *(int*)0x7280F0, *(int*)0x7280F4);
 }
 
 __declspec(naked) static void ListLayoutStub() {            // replaces "push 0; call [eax+0x2C]"
     __asm {
         pushad
-        call BumpListY                                      // __fastcall: ecx is already the container
+        call BeforeListLayout                               // __fastcall: ecx is already the container
         popad
         push 0
         call dword ptr [eax + 0x2C]
@@ -243,13 +295,25 @@ __declspec(naked) static void ListLayoutStub() {            // replaces "push 0;
     }
 }
 
-static void ListLayoutInstall() {
-    if (!g_popupShift) return;
+static bool ListLayoutInstall() {
+    bool limitHooked = false;
+    const BYTE limitOrig[] = { 0x8B, 0x0D, 0xF0, 0x80, 0x72, 0x00 };   // mov ecx, [0x7280F0] at 0x55D482
+    if (memcmp((BYTE*)0x55D482, limitOrig, sizeof(limitOrig)) == 0) {
+        DWORD old;
+        VirtualProtect((LPVOID)0x55D482, 6, PAGE_EXECUTE_READWRITE, &old);
+        *(BYTE*)0x55D482 = 0xE8;
+        *(int*)(0x55D482 + 1) = (int)((BYTE*)&ListLimitStub - (BYTE*)(0x55D482 + 5));
+        *(BYTE*)(0x55D482 + 5) = 0x90;
+        VirtualProtect((LPVOID)0x55D482, 6, old, &old);
+        FlushInstructionCache(GetCurrentProcess(), (LPVOID)0x55D482, 6);
+        Log("display: list line limit hooked (0x55D482)");
+        limitHooked = true;
+    } else Log("display list line limit differs, lists keep the safe rect");
     const BYTE orig[] = { 0x6A, 0x00, 0xFF, 0x50, 0x2C };
     for (DWORD site : kListLayoutSites)
         if (memcmp((BYTE*)site, orig, sizeof(orig))) {
             Log("display list layout differs at %08lX, pop-ups not moved", site);
-            return;
+            return limitHooked;
         }
     for (DWORD site : kListLayoutSites) {
         DWORD old;
@@ -259,13 +323,12 @@ static void ListLayoutInstall() {
         VirtualProtect((LPVOID)site, 5, old, &old);
         FlushInstructionCache(GetCurrentProcess(), (LPVOID)site, 5);
     }
-    Log("display: pop-up lists moved to %d (%d sites)", kPopupTopUnits + g_popupShift,
-        (int)(sizeof(kListLayoutSites) / sizeof(kListLayoutSites[0])));
+    Log("display: list layout hooked (%d sites)", (int)(sizeof(kListLayoutSites) / sizeof(kListLayoutSites[0])));
+    return limitHooked;
 }
 
 // ---- DisplayTrace=1 (debug): log where every label is drawn
 // 0x60B9C0(string, x, y) with the font in ecx is the single text draw, so a burst of its calls is a map of the screen.
-static int g_displayTrace = 0;
 static int g_textBudget = 0;
 static int g_dispPass = 0;
 static int g_dispDump = 0;
@@ -477,8 +540,7 @@ static void DisplayFixInstall() {
     *(DWORD*)0x6AF694 = (DWORD)count;
     VirtualProtect((LPVOID)0x6AF690, 8, old, &old);
     Log("display menu: added size rows (%d items)", count);
-    PopupShiftInstall(count);
-    ListLayoutInstall();
+    PopupShiftInstall(count, ListLayoutInstall());
     if (g_displayTrace) {
         const BYTE textOrig[] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0, 0x81, 0xEC, 0x54, 0x03, 0x00, 0x00 };
         if (memcmp((BYTE*)0x60B9C0, textOrig, sizeof(textOrig)) == 0) {
