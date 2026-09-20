@@ -16,6 +16,7 @@
 static int g_uiFix = 1, g_movieFix = 1;
 static int g_menuBgAspect = 1;   // 0 = let the menu background stretch to the full screen, bars and all
 static int g_menuFillWidth = 0;  // 1 = anchor menu items to the real screen edges instead of the centred 4:3 box
+static int g_uiPixelAspect = 100;// horizontal scale as a percent of the vertical one; 80 undoes the port's stretch
 static int g_menuScalePct = 90, g_hudScalePct = 75;     // percent of "fill the screen height" (100 = H/480)
 static int g_subtitleScalePct = 0;                      // same, for cutscene subtitles; 0 = follow the menu size
 static int g_reticleScale = 0;                          // whole-number aim reticle scale; 0 = follow the HUD size
@@ -38,18 +39,23 @@ static float UiScale() { return FitScale(g_menuScalePct); }
 // originally placed them. Keeping the shape is the default because it lines the right-hand menu items up with the
 // logo and the art, which share the box; filling the width spreads the menu across the whole screen but breaks that
 // alignment, since the logo stays where the 4:3 composition puts it. Vertical placement is untouched either way.
+// UIPixelAspect: the 2D UI was drawn for a 512 pixel wide frame buffer and this port hands it 640, so every glyph
+// and every piece of menu art comes out a quarter wider than it was authored - visible against the PS2 release, and
+// present at 640x480 with every fix here turned off, so it belongs to the port rather than to this code. The X scale
+// is written separately from the Y one, so squashing X by 512/640 puts the proportions back. 100 leaves it alone.
 static void ApplyUiScale() {
     float s = UiScale();
-    *(float*)0x6AEA00 = s;
+    float sx = s * (g_uiPixelAspect / 100.0f);
+    *(float*)0x6AEA00 = sx;
     *(float*)0x6AEA04 = s;
     int w = ScreenW(), h = ScreenH();
-    int offX = (int)((w - 640.0f * s) / 2.0f), offY = (int)((h - 480.0f * s) / 2.0f);
+    int offX = (int)((w - 640.0f * sx) / 2.0f), offY = (int)((h - 480.0f * s) / 2.0f);
     g_uiOffX = g_menuFillWidth ? 0 : (offX > 0 ? offX : 0);
     g_uiOffY = offY > 0 ? offY : 0;
     if (g_rectKnown) {
         int rectOffX = g_menuFillWidth ? 0 : g_uiOffX;
-        *(int*)0x7280F0 = rectOffX + (int)(g_rectMargins[0] * s);
-        *(int*)0x7280F4 = w - rectOffX - (int)(g_rectMargins[2] * s);
+        *(int*)0x7280F0 = rectOffX + (int)(g_rectMargins[0] * sx);
+        *(int*)0x7280F4 = w - rectOffX - (int)(g_rectMargins[2] * sx);
         *(int*)0x7280F8 = g_uiOffY + (int)(g_rectMargins[1] * s);
         *(int*)0x7280FC = h - g_uiOffY - (int)(g_rectMargins[3] * s);
     }
@@ -347,8 +353,8 @@ static void MenuArtFixInstall() {
         FlushInstructionCache(GetCurrentProcess(), p, 5);
         ++bgSites;
     }
-    if (g_menuBgAspect) Log("shell background %s installed (%d of 2 sites)", g_menuBgAspect == 2 ? "cover" : "4:3 fit", bgSites);
-    else Log("menu background left stretched to the screen (MenuBackgroundAspect=0)");
+    if (g_menuBgAspect) Log("shell background %s installed (%d of 2 sites)", g_menuBgAspect == 2 ? "cover" : "fit", bgSites);
+    else Log("menu background left as the game draws it (MenuBackgroundAspect=0)");
 
     // City map (UI_Map.xpr, [0x6D95E8]): the renders at 0x4D5BAD and 0x4D8460 size and centre the map with
     // sx = W/640, sy = H/480 (call 0x6089F0 = GetScreenW; mulss [0x679944] = 1/640), so it stretches on wide screens.
