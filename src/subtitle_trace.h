@@ -16,13 +16,21 @@ static void __cdecl LogSubtitleElement() {
     for (int i = 0; i < 26; ++i) {
         DWORD v = *(DWORD*)(el + i * 4);
         float f = *(float*)&v;
-        char one[48];
-        sprintf_s(one, "+%02X=%08lX(%.2f) ", i * 4, v, f);
+        // Every field is dumped as a float too, and most of them are not floats: a dword like 0x7A123456 reads as
+        // 7.5e35, which "%.2f" spells out over 39 digits and overruns the buffer. sprintf_s answers that by
+        // calling the invalid parameter handler, which fastfails the process (0xC0000409) - so bound the text
+        // with %g and truncate rather than fail.
+        char one[64];
+        _snprintf_s(one, sizeof(one), _TRUNCATE, "+%02X=%08lX(%g) ", i * 4, v, f);
         if (strlen(line) + strlen(one) < sizeof(line) - 1) strcat_s(line, one);
     }
     ++g_subtitleLogged;
-    Log("subtitle element %08lX vtable %08lX font %08lX screen %dx%d: %s",
-        el, *(DWORD*)el, *(DWORD*)0x6D9560, ScreenW(), ScreenH(), line);
+    // 0x490B23 passes [element+0x0C] to the text routine, not [0x6D9560], so print both: if they differ, the scale
+    // subtitle_fix.h writes is going into a font object the subtitles never draw with.
+    DWORD elFont = *(DWORD*)(el + 0x0C);
+    Log("subtitle element %08lX vtable %08lX element font %08lX global font %08lX %s screen %dx%d: %s",
+        el, *(DWORD*)el, elFont, *(DWORD*)0x6D9560,
+        elFont == *(DWORD*)0x6D9560 ? "(same)" : "(DIFFERENT)", ScreenW(), ScreenH(), line);
 }
 
 __declspec(naked) static void SubtitleTraceStub() {         // replaces call 0x4AEB10 (thiscall, 2 args, ret 8)
